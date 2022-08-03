@@ -63,23 +63,16 @@ class Fields(BaseFields):
 
 
 class AssetsManage(BaseAssetsManage):
-    ASSET_TYPES = ('Epic', 'Story', 'Attachment', 'Expression', 'Task', 'Issue', 'Theme', 'Defect', 'Request', 'Scope',
-                   'Test', 'Timebox')
 
     def connect(self):
-        try:
-            return _connect(self.instance_details['url'], self.instance_details['token'])
-        except Exception as e:
-            error_msg = 'Unable to connect to V1 host [{}].  The error is [{}].'.format(self.instance_details['url'],
-                                                                                        str(e))
-            raise as_exceptions.InboundError(error_msg, stack_trace=True)
+        return _connect(self.instance_details['url'], self.instance_details['token'])
 
     def fetch_sync_user(self):
         response = self.instance_obj._api_get('Member?sel=Username&where=IsSelf=\'True\'', None)
         return response['Assets'][0]['id']
 
     def fetch_projects(self):
-        response = self.instance_obj._api_get('Scope', 'sel=Name,ClosedDate,Parent')
+        response = self.instance_obj.api_get('Scope', 'sel=Name,ClosedDate,Parent')
         projects = []
 
         for project in response.get('Assets', {}):
@@ -113,9 +106,10 @@ class AssetsManage(BaseAssetsManage):
 
     def test_connection(self):
         try:
-            return self.instance_obj.test_connection()
+            self.instance_obj.test_connection()
+            return "Demo plugin test connection connection is successfull"
         except Exception as ex:
-            raise as_exceptions.SanitizedPluginError("Unknown error connecting to Digital.ai Agility.", ex.__str__())
+            raise as_exceptions.SanitizedPluginError("Unknown error connecting to Demo Plugin integration system.", str(ex))
 
 
 class WebHook(BaseWebHook):
