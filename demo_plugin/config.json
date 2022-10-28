@@ -3,7 +3,7 @@
     "description": "Demo external plugin",
     "logo_file": "logo_image.png",
     "integration_type": "ALM",
-    "is_webhook_at_project_level": true,
+    "is_webhook_at_project_level": false,
     "instance_properties": [
         {
             "title": "Name",

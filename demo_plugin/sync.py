@@ -16,6 +16,7 @@ import re
 from datetime import datetime
 from dateutil import parser
 import time
+import external_plugins.zendesk_plugin.zendesk as zendesk
 
 
 class Payload(BasePayload):
@@ -66,7 +67,7 @@ class Event(BaseEvent):
 class Inbound(BaseInbound):
     def connect(self):
         try:
-            return _connect(instance=self.instance_details)
+            return zendesk.Zendesk(self.instance_details['url'], self.instance_details['email'], self.instance_details['password'])
         except Exception as e:
             error_msg = 'Connection to Demo plugin failed.  Error is [{}].'.format(str(e))
             raise as_exceptions.InboundError(error_msg, stack_trace=True)
