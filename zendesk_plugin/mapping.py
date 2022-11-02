@@ -172,10 +172,21 @@ class AssetsManage(BaseAssetsManage):
 class WebHook(BaseWebHook):
 
     def create_webhook(self, webhook_name, webhook_url, webhook_description):
-        webhook_data = self.instance_obj.webhook(webhook_url, webhook_name, webhook_description)
-        category_id = self.create_trigger_categories()
-        self.create_triggers(webhook_data["id"], category_id)
-    
+        payload = {
+            "webhook": {
+                "endpoint": "{}".format(webhook_url),
+                "http_method": "POST",
+                "name": "{}".format(webhook_name),
+                "status": "active",
+                "request_format": "json",
+                "subscriptions": ["conditional_ticket_events"]
+            }
+        }  # Payload data to create single webhook
+
+        webhook_data = self.instance_obj.webhooks(payload=payload)  # Creating webhook
+        category_id = self.create_trigger_categories()  # Creating trigger category
+        self.create_triggers(webhook_data["id"], category_id)  # Creating triggers
+
     def create_trigger_categories(self):
         trigger_category_exist_list = self.instance_obj.trigger_categories()
 

@@ -63,22 +63,18 @@ class Zendesk:
         status_code, response = self.request("GET", path)
         return response
 
-    def webhook(self, destination_endpoint_url, webhook_name, webhook_description, id=None):
+    def webhooks(self, id=None, payload=None):
         path = "webhooks/{}".format(id) if id else "webhooks"
 
-        payload = {
-            "webhook": {
-                "endpoint": "{}".format(destination_endpoint_url),
-                "http_method": "POST",
-                "name": "{}".format(webhook_name),
-                "status": "active",
-                "request_format": "json",
-                "subscriptions": ["conditional_ticket_events"]
-            }
-        }
-
-        status_code, response = self.request("POST", path, payload)
-        return response["webhook"]
+        if payload:
+            if id:
+                status_code, response = self.request("PUT", path, payload)
+            else:
+                status_code, response = self.request("POST", path, payload)
+            return response["webhook"]
+        else:
+            status_code, response = self.request("GET", path)
+            return response["webhooks"]
 
     def trigger_categories(self, id=None, payload=None):
         path = "trigger_categories/{}".format(id) if id else "trigger_categories"
