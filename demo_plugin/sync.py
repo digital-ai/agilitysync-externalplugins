@@ -22,41 +22,41 @@ import external_plugins.zendesk_plugin.zendesk as zendesk
 class Payload(BasePayload):
 
     def fetch_project(self, event):
-        return event['issue']['fields']['project']['id']
+        return event["ticket"]["external_id"].split("-")[-1]
 
     def fetch_asset(self, event):
-        return event['issue']['fields']['issuetype']['id']
+        return event['ticket']["type"].lower()
 
     def is_cyclic_event(self, event, sync_user):
-        return bool(event['instigator']['_oid'] == sync_user)
+        return bool(event['user']['id'] == str(sync_user))
 
 
 class Event(BaseEvent):
 
     def fetch_event_type(self):
-        event_type = self.event['webhookEvent']
+        event_type = self.event['action']
 
-        if event_type in ('issue_created',):
+        if event_type in ('ticket_created',):
             return EventTypes.CREATE
         elif event_type == 'jira:issue_deleted':
             return EventTypes.DELETE
-        elif event_type in ('jira:issue_updated', 'comment_created'):
+        elif event_type in ('ticket_updated', 'comment_created'):
             return EventTypes.UPDATE
 
         error_msg = 'Unsupported event type [{}]'.format(event_type)
         raise as_exceptions.PayloadError(error_msg)
 
     def fetch_workitem_id(self):
-        return self.event['issue']['id']
+        return self.event['ticket']['id']
 
     def fetch_workitem_display_id(self):
-        return self.event['issue']['key']
+        return self.event['ticket']['id']
 
     def fetch_workitem_url(self):
-        return '/browse/{}'.format(self.event['issue']['key'])
+        return self.event['ticket']['url']
 
     def fetch_revision(self):
-        return self.event['snapshot']['_oid']
+        return self.event['ticket']['updated_at_with_timestamp']
 
     def fetch_timestamp(self):
         timestamp = parser.parse(self.event['issue']['fields']['updated'])
@@ -137,7 +137,7 @@ class Outbound(BaseOutbound):
 
     def connect(self):
         try:
-            return ._connect(instance=self.instance_details)
+            return zendesk.Zendesk(self.instance_details['url'], self.instance_details['email'], self.instance_details['password'])
         except Exception as e:
             error_msg = 'Connection to Demo plugin failed.  Error is [{}].'.format(str(e))
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
