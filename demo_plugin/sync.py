@@ -22,7 +22,7 @@ import external_plugins.zendesk_plugin.zendesk as zendesk
 class Payload(BasePayload):
 
     def fetch_project(self, event):
-        return event["ticket"]["external_id"].split("-")[-1]
+        return "no_project"
 
     def fetch_asset(self, event):
         return event['ticket']["type"].lower()
@@ -38,7 +38,7 @@ class Event(BaseEvent):
 
         if event_type in ('ticket_created',):
             return EventTypes.CREATE
-        elif event_type == 'jira:issue_deleted':
+        elif event_type == 'ticket_deleted':
             return EventTypes.DELETE
         elif event_type in ('ticket_updated', 'comment_created'):
             return EventTypes.UPDATE
@@ -59,7 +59,7 @@ class Event(BaseEvent):
         return self.event['ticket']['updated_at_with_timestamp']
 
     def fetch_timestamp(self):
-        timestamp = parser.parse(self.event['issue']['fields']['updated'])
+        timestamp = parser.parse(self.event['ticket']["updated_at_with_timestamp"])
 
         return datetime.fromtimestamp(time.mktime(timestamp.utctimetuple()))
 
