@@ -92,14 +92,15 @@ class Inbound(BaseInbound):
     def fetch_event_category(self):
         category = []
 
-        event_type = self.event['webhookEvent']
+        event_type = self.event["action"]
 
-        if event_type in ('issue_created', 'issue_updated', 'issue_deleted'):
+        if event_type in ('ticket_created', 'ticket_updated', 'ticket_deleted'):
             category.append(EventCategory.WORKITEM)
-        if event_type == 'issue_created' and len(self.event['issue']['fields'].get('attachment', ())) > 0:
-            category.append(EventCategory.ATTACHMENT)
-        if event_type == 'comment_created':
-            category.append(EventCategory.COMMENT)
+        if event_type == 'ticket_created':
+            if "Attachment(s):" in self.event['ticket']['latest_comment_html']:
+                category.append(EventCategory.ATTACHMENT)
+            # if event_type == 'comment_created':
+            #     category.append(EventCategory.COMMENT)
 
         return category
 
@@ -148,25 +149,47 @@ class Outbound(BaseOutbound):
             err_msg = "Unable to transform user as user does not exists [{}]".format(user_value)
             raise as_exceptions.SkipFieldToSync(err_msg)
 
+    def transform_fields(self, transfome_field_objs):
+        create_fields = {}
+
+        for outbound_field in transfome_field_objs:
+            field_name = outbound_field.name
+
+            if field_name in ["Assignee"]:  # Temp skip
+                continue
+
+            field_value = outbound_field.value
+            create_fields[field_name.lower()] = field_value
+
+        create_fields["type"] = self.asset_info["asset"]
+
+        return create_fields
+
     def create(self, sync_fields):
         try:
-            issue = self.instance_object.create_issue(sync_fields['create_fields'])
+            payload = {
+                "ticket": sync_fields
+            }
+
+            ticket = self.instance_object.tickets(payload=payload)
             sync_info = {
-                "project": sync_fields['create_fields'].pop("project"),
-                "issuetype": sync_fields['create_fields'].pop("issuetype"),
-                'synced_fields': sync_fields['create_fields']
+                "project": ticket["external_id"],
+                "issuetype": ticket["type"],
+                "synced_fields": sync_fields
             }
             xref_object = {
-                "relative_url": '/browse/{}'.format(issue.key),
-                'id': issue.id,
-                'display_id': issue.key,
+                "relative_url": ticket["url"],
+                'id': ticket["id"],
+                'display_id': ticket["id"],
                 'sync_info': sync_info,
             }
-            xref_object["absolute_url"] = "{}{}".format(self.instance_details["url"].rstrip("/"),
-                                                        xref_object["relative_url"])
+            xref_object["absolute_url"] = "{}{}".format(
+                self.instance_details["url"].rstrip("/"),
+                xref_object["relative_url"])
             return xref_object
+
         except Exception as e:
-            error_msg = ("Unable to create [{}] in Jira. Error is [{}].\nTrying to sync fields \n"
+            error_msg = ("Unable to create [{}] in Zendesk. Error is [{}].\n Trying to sync fields \n"
                          "[{}]\n.".format(self.asset_info["display_name"], e, sync_fields['create_fields']))
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
 

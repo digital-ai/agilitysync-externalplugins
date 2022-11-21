@@ -41,12 +41,17 @@ class Zendesk:
         else:
             return "Can not establish connection to Zendesk server."
 
-    def tickets(self, id=None):
-        # fetch_tickets, fetch_tickets_on_id
+    def tickets(self, id=None, payload=None):
         path = "tickets/{}".format(id) if id else "tickets"
-
-        status_code, response = self.request("GET", path)
-        return response
+        if payload:
+            if id:
+                status_code, response = self.request("PUT", path, payload)
+            else:
+                status_code, response = self.request("POST", path, payload)
+            return response["ticket"]
+        else:
+            status_code, response = self.request("GET", path)
+            return response["tickets"]
 
     def _meta_request(self, path):
         status_code, response = self.request("GET", path)
