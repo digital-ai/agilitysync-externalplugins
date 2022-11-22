@@ -16,49 +16,51 @@ import re
 from datetime import datetime
 from dateutil import parser
 import time
+import external_plugins.zendesk_plugin.zendesk as zendesk
 
 
 class Payload(BasePayload):
 
     def fetch_project(self, event):
-        return event['issue']['fields']['project']['id']
+        return "no_project"
 
     def fetch_asset(self, event):
-        return event['issue']['fields']['issuetype']['id']
+        return event['ticket']["type"].lower()
 
     def is_cyclic_event(self, event, sync_user):
-        return bool(event['instigator']['_oid'] == sync_user)
+        return bool(event['user']['id'] == str(sync_user))
 
 
 class Event(BaseEvent):
 
     def fetch_event_type(self):
-        event_type = self.event['webhookEvent']
+        event_type = self.event['action']
 
-        if event_type in ('issue_created',):
+        if event_type in ('ticket_created',):
             return EventTypes.CREATE
-        elif event_type == 'jira:issue_deleted':
+        elif event_type == 'ticket_deleted':
             return EventTypes.DELETE
-        elif event_type in ('jira:issue_updated', 'comment_created'):
+        elif event_type in ('ticket_updated', 'comment_created'):
             return EventTypes.UPDATE
+
 
         error_msg = 'Unsupported event type [{}]'.format(event_type)
         raise as_exceptions.PayloadError(error_msg)
 
     def fetch_workitem_id(self):
-        return self.event['issue']['id']
+        return self.event['ticket']['id']
 
     def fetch_workitem_display_id(self):
-        return self.event['issue']['key']
+        return self.event['ticket']['id']
 
     def fetch_workitem_url(self):
-        return '/browse/{}'.format(self.event['issue']['key'])
+        return self.event['ticket']['url']
 
     def fetch_revision(self):
-        return self.event['snapshot']['_oid']
+        return self.event['ticket']['updated_at_with_timestamp']
 
     def fetch_timestamp(self):
-        timestamp = parser.parse(self.event['issue']['fields']['updated'])
+        timestamp = parser.parse(self.event['ticket']["updated_at_with_timestamp"])
 
         return datetime.fromtimestamp(time.mktime(timestamp.utctimetuple()))
 
@@ -66,7 +68,7 @@ class Event(BaseEvent):
 class Inbound(BaseInbound):
     def connect(self):
         try:
-            return _connect(instance=self.instance_details)
+            return zendesk.Zendesk(self.instance_details['url'], self.instance_details['email'], self.instance_details['password'])
         except Exception as e:
             error_msg = 'Connection to Demo plugin failed.  Error is [{}].'.format(str(e))
             raise as_exceptions.InboundError(error_msg, stack_trace=True)
@@ -88,22 +90,47 @@ class Inbound(BaseInbound):
 
         return attachments
 
+    def is_comment_updated(self, updated_at_with_time, latest_public_comment_html):
+        updated_comment_epoch = datetime.strptime(updated_at_with_time, "%B %d, %Y at %H:%M").timestamp()
+        search_pattern = datetime.fromtimestamp(updated_comment_epoch).strftime('%b %d, %Y, %H:%M')
+        found_pattern = re.search(search_pattern, latest_public_comment_html)
+        if found_pattern:
+            return True
+        else:
+            return False
+
     def fetch_event_category(self):
         category = []
 
-        event_type = self.event['webhookEvent']
+        event_type = self.event["action"]
 
-        if event_type in ('issue_created', 'issue_updated', 'issue_deleted'):
+        if event_type in ('ticket_created', 'ticket_updated', 'ticket_deleted'):
             category.append(EventCategory.WORKITEM)
-        if event_type == 'issue_created' and len(self.event['issue']['fields'].get('attachment', ())) > 0:
-            category.append(EventCategory.ATTACHMENT)
-        if event_type == 'comment_created':
+
+        if self.is_comment_updated(self.event["ticket"]["updated_at_with_time"], self.event["ticket"]["latest_public_comment_html"]):
             category.append(EventCategory.COMMENT)
+
+            if "Attachment(s):" in self.event['ticket']['latest_comment_html']:
+                category.append(EventCategory.ATTACHMENT)
+
+        # if event_type == 'ticket_created':
+        #     if "Attachment(s):" in self.event['ticket']['latest_comment_html']:
+        #         category.append(EventCategory.ATTACHMENT)
+
+        # elif event_type == "ticket_updated":
+        #     if "Attachment(s):" in self.event['ticket']['latest_comment_html']:
+        #         category.append(EventCategory.ATTACHMENT)
 
         return category
 
     def fetch_comment(self):
-        return self.event['comment']['body'] if "comment" in self.event else ""
+        comment_data = ""
+        if "latest_comment_html" in self.event["ticket"]:
+            data = self.event['ticket']['latest_comment_html']
+            data = data.replace("----------------------------------------------\n\n", "")
+            data = data.split("Attachment(s):\n")
+            comment_data = data[0]
+        return comment_data
 
     def fetch_parent_id(self):
         parent_id, old_parent_id = (None, None)
@@ -136,7 +163,7 @@ class Outbound(BaseOutbound):
 
     def connect(self):
         try:
-            return ._connect(instance=self.instance_details)
+            return zendesk.Zendesk(self.instance_details['url'], self.instance_details['email'], self.instance_details['password'])
         except Exception as e:
             error_msg = 'Connection to Demo plugin failed.  Error is [{}].'.format(str(e))
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
@@ -147,26 +174,48 @@ class Outbound(BaseOutbound):
             err_msg = "Unable to transform user as user does not exists [{}]".format(user_value)
             raise as_exceptions.SkipFieldToSync(err_msg)
 
+    def transform_fields(self, transfome_field_objs):
+        create_fields = {}
+
+        for outbound_field in transfome_field_objs:
+            field_name = outbound_field.name
+
+            if field_name in ["Assignee"]:  # Temp skip
+                continue
+
+            field_value = outbound_field.value
+            create_fields[field_name.lower()] = field_value
+
+        create_fields["type"] = self.asset_info["asset"]
+
+        return create_fields
+
     def create(self, sync_fields):
         try:
-            issue = self.instance_object.create_issue(sync_fields['create_fields'])
+            payload = {
+                "ticket": sync_fields
+            }
+
+            ticket = self.instance_object.tickets(payload=payload)
             sync_info = {
-                "project": sync_fields['create_fields'].pop("project"),
-                "issuetype": sync_fields['create_fields'].pop("issuetype"),
-                'synced_fields': sync_fields['create_fields']
+                "project": ticket["external_id"],
+                "issuetype": ticket["type"],
+                "synced_fields": sync_fields
             }
             xref_object = {
-                "relative_url": '/browse/{}'.format(issue.key),
-                'id': issue.id,
-                'display_id': issue.key,
+                "relative_url": "/agent/tickets/{}".format(ticket["id"]),
+                'id': str(ticket["id"]),
+                'display_id': str(ticket["id"]),
                 'sync_info': sync_info,
             }
-            xref_object["absolute_url"] = "{}{}".format(self.instance_details["url"].rstrip("/"),
-                                                        xref_object["relative_url"])
+            xref_object["absolute_url"] = "{}{}".format(
+                self.instance_details["url"].rstrip("/"),
+                xref_object["relative_url"])
             return xref_object
+
         except Exception as e:
-            error_msg = ("Unable to create [{}] in Jira. Error is [{}].\nTrying to sync fields \n"
-                         "[{}]\n.".format(self.asset_info["display_name"], e, sync_fields['create_fields']))
+            error_msg = ("Unable to create [{}] in Zendesk. Error is [{}].\n Trying to sync fields \n"
+                         "[{}]\n.".format(self.asset_info["display_name"], e, sync_fields))
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
 
     def create_remote_link(self, inbound_workitem_id, inbound_workitem_url, id_field, url_field):
@@ -185,8 +234,12 @@ class Outbound(BaseOutbound):
 
     def update(self, sync_fields):
         try:
-            self.instance_object.update_issue(self.workitem_id,
-                                              sync_fields['create_fields'], sync_fields['update_fields'])
+            payload = {
+                "ticket": sync_fields
+            }
+
+            self.instance_object.tickets(id=self.workitem_id, payload=payload)
+
         except Exception as e:
             error_msg = ('Unable to sync fields in Jira. Error is [{}]. Trying to sync fields \n'
                          '[{} {}]\n.'.format(e, sync_fields['create_fields'], sync_fields['update_fields']))
@@ -194,7 +247,17 @@ class Outbound(BaseOutbound):
 
     def comment_create(self, comment):
         try:
-            self.instance_object.issue_add_comment(self.workitem_id, comment)
+            payload = {
+                "ticket": {
+                    "comment": {
+                        "body": comment
+                    }
+                }
+            }
+
+            self.instance_object.tickets(id=self.workitem_id, payload=payload)
+
+            # self.instance_object.issue_add_comment(self.workitem_id, comment)
         except Exception as e:
             error_msg = 'Unable to sync comment. Error is [{}]. The comment is [{}]'.format(str(e), comment)
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
