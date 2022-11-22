@@ -18,9 +18,9 @@
             "type": "input"
         },
         {
-            "title": "Password or API Token",
+            "title": "Password",
             "name": "password",
-            "description": "Demo plugin password",
+            "description": "Zendesk plugin password",
             "format": "password",
             "type": "input"
         },
@@ -39,7 +39,7 @@
     "assets_properties": [
         {
             "type": "project",
-            "title": "Demo plugin Projects",
+            "title": "Zendesk plugin Projects",
             "name": "projects",
             "description": "To get list of projects of instance",
             "is_render_treeview": false,
