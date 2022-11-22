@@ -234,8 +234,12 @@ class Outbound(BaseOutbound):
 
     def update(self, sync_fields):
         try:
-            self.instance_object.update_issue(self.workitem_id,
-                                              sync_fields['create_fields'], sync_fields['update_fields'])
+            payload = {
+                "ticket": sync_fields
+            }
+
+            self.instance_object.tickets(id=self.workitem_id, payload=payload)
+
         except Exception as e:
             error_msg = ('Unable to sync fields in Jira. Error is [{}]. Trying to sync fields \n'
                          '[{} {}]\n.'.format(e, sync_fields['create_fields'], sync_fields['update_fields']))
