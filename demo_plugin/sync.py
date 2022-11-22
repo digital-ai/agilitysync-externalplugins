@@ -43,6 +43,7 @@ class Event(BaseEvent):
         elif event_type in ('ticket_updated', 'comment_created'):
             return EventTypes.UPDATE
 
+
         error_msg = 'Unsupported event type [{}]'.format(event_type)
         raise as_exceptions.PayloadError(error_msg)
 
@@ -89,6 +90,15 @@ class Inbound(BaseInbound):
 
         return attachments
 
+    def is_comment_updated(self, updated_at_with_time, latest_public_comment_html):
+        updated_comment_epoch = datetime.strptime(updated_at_with_time, "%B %d, %Y at %H:%M").timestamp()
+        search_pattern = datetime.fromtimestamp(updated_comment_epoch).strftime('%b %d, %Y, %H:%M')
+        found_pattern = re.search(search_pattern, latest_public_comment_html)
+        if found_pattern:
+            return True
+        else:
+            return False
+
     def fetch_event_category(self):
         category = []
 
@@ -96,16 +106,31 @@ class Inbound(BaseInbound):
 
         if event_type in ('ticket_created', 'ticket_updated', 'ticket_deleted'):
             category.append(EventCategory.WORKITEM)
-        if event_type == 'ticket_created':
+
+        if self.is_comment_updated(self.event["ticket"]["updated_at_with_time"], self.event["ticket"]["latest_public_comment_html"]):
+            category.append(EventCategory.COMMENT)
+
             if "Attachment(s):" in self.event['ticket']['latest_comment_html']:
                 category.append(EventCategory.ATTACHMENT)
-            # if event_type == 'comment_created':
-            #     category.append(EventCategory.COMMENT)
+
+        # if event_type == 'ticket_created':
+        #     if "Attachment(s):" in self.event['ticket']['latest_comment_html']:
+        #         category.append(EventCategory.ATTACHMENT)
+
+        # elif event_type == "ticket_updated":
+        #     if "Attachment(s):" in self.event['ticket']['latest_comment_html']:
+        #         category.append(EventCategory.ATTACHMENT)
 
         return category
 
     def fetch_comment(self):
-        return self.event['comment']['body'] if "comment" in self.event else ""
+        comment_data = ""
+        if "latest_comment_html" in self.event["ticket"]:
+            data = self.event['ticket']['latest_comment_html']
+            data = data.replace("----------------------------------------------\n\n", "")
+            data = data.split("Attachment(s):\n")
+            comment_data = data[0]
+        return comment_data
 
     def fetch_parent_id(self):
         parent_id, old_parent_id = (None, None)
@@ -178,9 +203,9 @@ class Outbound(BaseOutbound):
                 "synced_fields": sync_fields
             }
             xref_object = {
-                "relative_url": ticket["url"],
-                'id': ticket["id"],
-                'display_id': ticket["id"],
+                "relative_url": "/agent/tickets/{}".format(ticket["id"]),
+                'id': str(ticket["id"]),
+                'display_id': str(ticket["id"]),
                 'sync_info': sync_info,
             }
             xref_object["absolute_url"] = "{}{}".format(
@@ -190,7 +215,7 @@ class Outbound(BaseOutbound):
 
         except Exception as e:
             error_msg = ("Unable to create [{}] in Zendesk. Error is [{}].\n Trying to sync fields \n"
-                         "[{}]\n.".format(self.asset_info["display_name"], e, sync_fields['create_fields']))
+                         "[{}]\n.".format(self.asset_info["display_name"], e, sync_fields))
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
 
     def create_remote_link(self, inbound_workitem_id, inbound_workitem_url, id_field, url_field):
@@ -218,7 +243,17 @@ class Outbound(BaseOutbound):
 
     def comment_create(self, comment):
         try:
-            self.instance_object.issue_add_comment(self.workitem_id, comment)
+            payload = {
+                "ticket": {
+                    "comment": {
+                        "body": comment
+                    }
+                }
+            }
+
+            self.instance_object.tickets(id=self.workitem_id, payload=payload)
+
+            # self.instance_object.issue_add_comment(self.workitem_id, comment)
         except Exception as e:
             error_msg = 'Unable to sync comment. Error is [{}]. The comment is [{}]'.format(str(e), comment)
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
