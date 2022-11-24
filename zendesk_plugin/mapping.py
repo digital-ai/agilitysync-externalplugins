@@ -9,8 +9,10 @@ from agilitysync.mapping import (
     FieldDisplayIcon
 )
 
-import external_plugins.zendesk_plugin.zendesk as zendesk
+from external_plugins.zendesk_plugin import transformer_functions
 import external_plugins.zendesk_plugin.default as DEFAULT
+
+from agilitysync.external_lib.restapi import ASyncRestApi
 
 class Field(BaseField):
     def is_required_field(self):
@@ -108,16 +110,21 @@ class Field(BaseField):
 class Fields(BaseFields):
 
     def fetch_fields(self):
-        fields = self.instance_obj.ticket_fields()
+        fields = transformer_functions.ticket_fields(self.instance_obj)
         return fields
+
 
 class AssetsManage(BaseAssetsManage):
 
     def connect(self):
-        return zendesk.Zendesk(self.instance_details['url'], self.instance_details['email'], self.instance_details['password'])
+        return transformer_functions.connect(
+            self.instance_details
+        )
 
     def fetch_sync_user(self):
-        user = self.instance_obj.get_user_by_email(self.instance_details['email'])
+        user = transformer_functions.get_user_by_email(
+            self.instance_obj,
+            self.instance_details['email'])
         return user["results"][0]["id"]
 
     def fetch_projects(self):
@@ -132,7 +139,7 @@ class AssetsManage(BaseAssetsManage):
 
     def fetch_assets(self):
         asset_types = []
-        for field in self.instance_obj.ticket_fields():
+        for field in transformer_functions.ticket_fields(self.instance_obj):
             if field["type"] == "tickettype":
                 for option in field["system_field_options"]:
                     asset_types.append(
@@ -144,11 +151,11 @@ class AssetsManage(BaseAssetsManage):
         return asset_types
 
     def is_instance_supported(self):
-        tickets_data = self.instance_obj.tickets()
+        tickets_data = transformer_functions.tickets(self.instance_obj)
 
         if tickets_data:
             tik_url = tickets_data[0].get("url")
-            if (self.instance_obj.rest_endpoint_version in tik_url.split("/")):
+            if (DEFAULT.REST_ENDPOINT_VERSION in tik_url.split("/")):
                 return (True, None)
             else:
                 return (False, None)
@@ -157,9 +164,9 @@ class AssetsManage(BaseAssetsManage):
 
     def test_connection(self):
         try:
-            return self.instance_obj.check_connection()
+            return transformer_functions.check_connection(self.instance_obj)
         except Exception as ex:
-            raise as_exceptions.SanitizedPluginError("Unknown error connecting to Demo Plugin integration system.", str(ex))
+            raise as_exceptions.SanitizedPluginError("Unknown error connecting to Zendesk Plugin integration system.", str(ex))
 
 
 class WebHook(BaseWebHook):
@@ -176,12 +183,13 @@ class WebHook(BaseWebHook):
             }
         }  # Payload data to create single webhook
 
-        webhook_data = self.instance_obj.webhooks(payload=payload)  # Creating webhook
+        webhook_data = transformer_functions.webhooks(self.instance_obj,
+                                                      payload=payload)  # Creating webhook
         category_id = self.create_trigger_categories()  # Creating trigger category
         self.create_triggers(webhook_data["id"], category_id)  # Creating triggers
 
     def create_trigger_categories(self):
-        trigger_category_exist_list = self.instance_obj.trigger_categories()
+        trigger_category_exist_list = transformer_functions.trigger_categories(self.instance_obj)
 
         trigger_category_exist = [
             {
@@ -203,7 +211,7 @@ class WebHook(BaseWebHook):
                     "position": 0
                 }
             }
-            catagory_data = self.instance_obj.trigger_categories(payload=payload)
+            catagory_data = transformer_functions.trigger_categories(self.instance_obj,payload=payload)
             return catagory_data["id"]
 
     def create_triggers(self, webhook_id, category_id):
@@ -212,7 +220,7 @@ class WebHook(BaseWebHook):
         self.create_ticket_trigger(webhook_id, category_id)
 
     def create_ticket_trigger(self, webhook_id, category_id):
-        triggers_list = self.instance_obj.triggers()
+        triggers_list = transformer_functions.triggers(self.instance_obj)
 
         for as_trigger in DEFAULT.AS_TRIGGERS:
 
@@ -232,7 +240,8 @@ class WebHook(BaseWebHook):
                     }
                 }
                 update_payload["trigger"]["actions"].extend(exist_as_trigger[0]["actions"])
-                self.instance_obj.triggers(exist_as_trigger[0]["id"], update_payload)
+                transformer_functions.triggers(self.instance_obj,
+                exist_as_trigger[0]["id"], update_payload)
             else:
                 create_payload = {
                     "trigger": {
@@ -252,4 +261,5 @@ class WebHook(BaseWebHook):
                     }
                 }
 
-                self.instance_obj.triggers(payload=create_payload)
+                transformer_functions.triggers(self.instance_obj,
+                                               payload=create_payload)

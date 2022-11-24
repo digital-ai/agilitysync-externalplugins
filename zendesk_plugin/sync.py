@@ -1,5 +1,3 @@
-from bson import ObjectId
-
 from agilitysync.sync import (
     as_exceptions,
     as_log,
@@ -16,7 +14,7 @@ import re
 from datetime import datetime
 from dateutil import parser
 import time
-import external_plugins.zendesk_plugin.zendesk as zendesk
+from external_plugins.zendesk_plugin import transformer_functions
 
 
 class Payload(BasePayload):
@@ -54,7 +52,7 @@ class Event(BaseEvent):
         return self.event['ticket']['id']
 
     def fetch_workitem_url(self):
-        return self.event['ticket']['url']
+        return "/".join(self.event['ticket']['url'].split("/")[1:])
 
     def fetch_revision(self):
         return self.event['ticket']['updated_at_with_timestamp']
@@ -68,7 +66,9 @@ class Event(BaseEvent):
 class Inbound(BaseInbound):
     def connect(self):
         try:
-            return zendesk.Zendesk(self.instance_details['url'], self.instance_details['email'], self.instance_details['password'])
+            return transformer_functions.connect(
+                                                self.instance_details
+            )
         except Exception as e:
             error_msg = 'Connection to Demo plugin failed.  Error is [{}].'.format(str(e))
             raise as_exceptions.InboundError(error_msg, stack_trace=True)
@@ -163,7 +163,9 @@ class Outbound(BaseOutbound):
 
     def connect(self):
         try:
-            return zendesk.Zendesk(self.instance_details['url'], self.instance_details['email'], self.instance_details['password'])
+            return transformer_functions.connect(
+                                                self.instance_details
+                                                )
         except Exception as e:
             error_msg = 'Connection to Demo plugin failed.  Error is [{}].'.format(str(e))
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
@@ -196,7 +198,8 @@ class Outbound(BaseOutbound):
                 "ticket": sync_fields
             }
 
-            ticket = self.instance_object.tickets(payload=payload)
+            ticket = transformer_functions.tickets(self.instance_object, payload=
+                                                   payload)
             sync_info = {
                 "project": ticket["external_id"],
                 "issuetype": ticket["type"],
@@ -238,7 +241,8 @@ class Outbound(BaseOutbound):
                 "ticket": sync_fields
             }
 
-            self.instance_object.tickets(id=self.workitem_id, payload=payload)
+            transformer_functions.tickets(self.instance_object,
+                                          id=self.workitem_id, payload=payload)
 
         except Exception as e:
             error_msg = ('Unable to sync fields in Jira. Error is [{}]. Trying to sync fields \n'
@@ -255,7 +259,8 @@ class Outbound(BaseOutbound):
                 }
             }
 
-            self.instance_object.tickets(id=self.workitem_id, payload=payload)
+            transformer_functions.tickets(self.instance_object,
+                                          id=self.workitem_id, payload=payload)
 
             # self.instance_object.issue_add_comment(self.workitem_id, comment)
         except Exception as e:
