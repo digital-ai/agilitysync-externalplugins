@@ -41,7 +41,6 @@ class Event(BaseEvent):
         elif event_type in ('ticket_updated', 'comment_created'):
             return EventTypes.UPDATE
 
-
         error_msg = 'Unsupported event type [{}]'.format(event_type)
         raise as_exceptions.PayloadError(error_msg)
 
@@ -73,23 +72,6 @@ class Inbound(BaseInbound):
             error_msg = 'Connection to Demo plugin failed.  Error is [{}].'.format(str(e))
             raise as_exceptions.InboundError(error_msg, stack_trace=True)
 
-    def fetch_attachments_metadata(self):
-        attachments = []
-
-        for attachment_doc in self.event['issue']['fields'].get('attachment', []):
-            attachments.append(
-                {
-                    "type": "ADDED",
-                    "id": attachment_doc["id"],
-                    "filename": attachment_doc["filename"],
-                    "content_type": attachment_doc['mimeType'],
-                    "url": attachment_doc["url"],
-                    "headers": {"Authorization": self.instance_object.token}
-                }
-            )
-
-        return attachments
-
     def is_comment_updated(self, updated_at_with_time, latest_public_comment_html):
         updated_comment_epoch = datetime.strptime(updated_at_with_time, "%B %d, %Y at %H:%M").timestamp()
         search_pattern = datetime.fromtimestamp(updated_comment_epoch).strftime('%b %d, %Y, %H:%M')
@@ -113,14 +95,6 @@ class Inbound(BaseInbound):
             if "Attachment(s):" in self.event['ticket']['latest_comment_html']:
                 category.append(EventCategory.ATTACHMENT)
 
-        # if event_type == 'ticket_created':
-        #     if "Attachment(s):" in self.event['ticket']['latest_comment_html']:
-        #         category.append(EventCategory.ATTACHMENT)
-
-        # elif event_type == "ticket_updated":
-        #     if "Attachment(s):" in self.event['ticket']['latest_comment_html']:
-        #         category.append(EventCategory.ATTACHMENT)
-
         return category
 
     def fetch_comment(self):
@@ -131,32 +105,6 @@ class Inbound(BaseInbound):
             data = data.split("Attachment(s):\n")
             comment_data = data[0]
         return comment_data
-
-    def fetch_parent_id(self):
-        parent_id, old_parent_id = (None, None)
-
-        if self.event_type == EventTypes.CREATE:
-            for changes in self.event.get('changes', []):
-                if changes["super"] is not None:
-                    parent_id = changes["super"]
-
-        return (parent_id, old_parent_id)
-
-    def create_remote_link(self, display_id, url, id_field, url_field):
-        fields = {}
-
-        if id_field:
-            fields[id_field["name"]] = display_id
-        if url_field:
-            fields[url_field["name"]] = url
-
-        try:
-            if fields:
-                self.instance_object.update_issue(self.workitem_id, fields, {})
-            else:
-                self.instance_object.create_remote_link(self.workitem_id, display_id, url)
-        except Exception as e:
-            as_log.warn('Unable to create remote link. Error is [{}].'.format(str(e)))
 
 
 class Outbound(BaseOutbound):
@@ -169,12 +117,6 @@ class Outbound(BaseOutbound):
         except Exception as e:
             error_msg = 'Connection to Demo plugin failed.  Error is [{}].'.format(str(e))
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
-
-    def transform_usertype_value(self, user_value):
-        user = self.instance_object.find_user(user_value["username"])
-        if user is None:
-            err_msg = "Unable to transform user as user does not exists [{}]".format(user_value)
-            raise as_exceptions.SkipFieldToSync(err_msg)
 
     def transform_fields(self, transfome_field_objs):
         create_fields = {}
@@ -221,20 +163,6 @@ class Outbound(BaseOutbound):
                          "[{}]\n.".format(self.asset_info["display_name"], e, sync_fields))
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
 
-    def create_remote_link(self, inbound_workitem_id, inbound_workitem_url, id_field, url_field):
-        try:
-            fields = {}
-            if id_field:
-                fields[id_field['name']] = inbound_workitem_id
-            if url_field:
-                fields[url_field['name']] = inbound_workitem_url
-            if fields:
-                self.instance_object.update_issue(self.workitem_id, fields, {})
-            else:
-                self.instance_object.create_remote_link(self.workitem_id, inbound_workitem_id, inbound_workitem_url)
-        except Exception as e:
-            as_log.warn('Unable to create remote link in Jira.  Error is [%s].' % (e))
-
     def update(self, sync_fields):
         try:
             payload = {
@@ -261,8 +189,6 @@ class Outbound(BaseOutbound):
 
             transformer_functions.tickets(self.instance_object,
                                           id=self.workitem_id, payload=payload)
-
-            # self.instance_object.issue_add_comment(self.workitem_id, comment)
         except Exception as e:
             error_msg = 'Unable to sync comment. Error is [{}]. The comment is [{}]'.format(str(e), comment)
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
@@ -273,39 +199,3 @@ class Outbound(BaseOutbound):
         except Exception as e:
             error_msg = "Unable to DELETE issue {}. Error is {}.".format(self.workitem_id, str(e))
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
-
-
-class AttachmentUpload(BaseAttachmentUpload):
-    def fetch_header_info(self):
-        return {"Authorization": self.instance_object.token}
-
-    def fetch_upload_url(self):
-        atch_asset_doc = {
-            "Attributes": {
-                "Name": {"act": "set", "value": self.filename},
-                "ContentType": {"act": "set", "value": self.content_type},
-                "Filename": {"act": "set", "value": self.filename},
-                "Content": {"act": "set", "value": ""},
-                "Asset": {"act": "set", "value": {"idref": self.workitem_id}}
-            }
-        }
-        response = self.instance_object._api_post('Attachment', atch_asset_doc, 'json', 'json')
-        self.private_data['response_data'] = response
-        return "{}{}".format(self.instance_object.url,
-                             re.sub('^\\/[^\\/]+', '', response['Attributes']['Content']['value']))
-
-    def fetch_id(self):
-        return self.private_data['response_data']['id']
-
-    def fetch_url(self):
-        atch_url = self.private_data['response_data']['Attributes']['Content']['value']
-        return "{}{}".format(self.instance_object.url, re.sub('^\\/[^\\/]+', '', atch_url))
-
-    def upload_on_failed(self):
-        atch_id = self.private_data['response_data']['id']
-        self.instance_object._api_post("Attachment/{}?op=Delete".format(atch_id.split(":")[1]),
-                                       {'id': atch_id}, 'json', 'json')
-
-    def remove(self, attachment_id, verify_tls):
-        self.instance_object._api_post("Attachment/{}?op=Delete".format(attachment_id.split(":")[1]),
-                                       {'id': attachment_id}, 'json', 'json')
