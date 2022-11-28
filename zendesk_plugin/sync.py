@@ -192,10 +192,3 @@ class Outbound(BaseOutbound):
         except Exception as e:
             error_msg = 'Unable to sync comment. Error is [{}]. The comment is [{}]'.format(str(e), comment)
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
-
-    def delete(self):
-        try:
-            self.instance_object.delete_issue(self.instance_object, self.workitem_id)
-        except Exception as e:
-            error_msg = "Unable to DELETE issue {}. Error is {}.".format(self.workitem_id, str(e))
-            raise as_exceptions.OutboundError(error_msg, stack_trace=True)
