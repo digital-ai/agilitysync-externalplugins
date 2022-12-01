@@ -74,7 +74,7 @@ class Inbound(BaseInbound):
 
     def is_comment_updated(self, updated_at_with_time, latest_public_comment_html):
         updated_comment_epoch = datetime.strptime(updated_at_with_time, "%B %d, %Y at %H:%M").timestamp()
-        search_pattern = datetime.fromtimestamp(updated_comment_epoch).strftime('%b %d, %Y, %H:%M')
+        search_pattern = datetime.fromtimestamp(updated_comment_epoch).strftime('%b %-d, %Y, %H:%M')
         found_pattern = re.search(search_pattern, latest_public_comment_html)
         if found_pattern:
             return True
