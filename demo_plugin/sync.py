@@ -1,5 +1,6 @@
 from bson import ObjectId
 
+
 from agilitysync.sync import (
     as_exceptions,
     as_log,
