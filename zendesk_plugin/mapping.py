@@ -85,6 +85,10 @@ class Field(BaseField):
             "tagger": {
                 "type": fields_type["TEXT"],
                 "system": "tagger"
+            },
+            "custom_status": {
+                "type": fields_type["TEXT"],
+                "system": "custom_status"
             }
         }
         attribute_type = fields[self.field_attr['type']]["type"].capitalize()
