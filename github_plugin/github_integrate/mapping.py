@@ -16,7 +16,10 @@ from agilitysync.external_lib.restapi import ASyncRestApi
 
 class Field(BaseField):
     def is_required_field(self):
-        return self.field_attr["required"]
+        if self.field_attr[0].get('required') is True:
+            return True
+
+        return False 
 
     def is_disabled_field(self):
         return False
@@ -119,6 +122,10 @@ class Fields(BaseFields):
 
 
 class AssetsManage(BaseAssetsManage):
+    NO_PROJECT = {
+        "id": "no_project",
+        "name": "No Projects"
+    }
 
     def connect(self):
         return transformer_functions.connect(
@@ -130,27 +137,45 @@ class AssetsManage(BaseAssetsManage):
             #self.instance_obj,
             #self.instance_details['email'])
         #return user["results"][0]["id"]
+    
+   
+        
 
     def fetch_projects(self):
+        
+        
+       
+        response_repos= transformer_functions.get_repos(self.instance_obj,self.instance_details)
         projects = [
-            {
-                'id': 'no_project',
-                'display_name': 'No Projects',
-                "project": "no_project"
-            }
+            
         ]
+        
+
+        for project in response_repos:
+            # to fetch only active planning levels or projects
+            ##parent_id = project['Attributes']['Parent']['value']['idref'] if project['Attributes']['Parent']['value'] else project['Attributes']['Parent']['value']
+            projects.append(
+                {
+                    'id': project['id'],
+                    "project": project["id"],
+                    'display_name': project['name'],
+                    'parent_id': None
+                }
+            )
+            
+
+
         return projects
 
     def fetch_assets(self):
         asset_types = []
         for field in transformer_functions.ticket_fields(self.instance_obj):
-            if field["type"] == "tickettype":
-                for option in field["system_field_options"]:
+            
                     asset_types.append(
                         {
-                            "id": option["value"],
-                            "asset": option["value"],
-                            "display_name": option["value"].title(),
+                            "id": field["id"],
+                            "asset": field["asset"],
+                            "display_name": field["display_name"].title(),
                         })
         return asset_types
 
@@ -158,7 +183,7 @@ class AssetsManage(BaseAssetsManage):
         tickets_data = transformer_functions.tickets(self.instance_obj)
 
         if tickets_data:
-            tik_url = tickets_data[0].get("url")
+            tik_url = tickets_data
             if (DEFAULT.REST_ENDPOINT_VERSION in tik_url.split("/")):
                 return (True, None)
             else:
