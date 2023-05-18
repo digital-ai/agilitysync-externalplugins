@@ -24,7 +24,6 @@ def check_connection(instance,instance_details):
 
     path = "{}".format(
             DEFAULT.INITIAL_PATH, 
-            
             )
 
     response = instance.get(path)
