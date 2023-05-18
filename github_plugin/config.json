@@ -1,0 +1,79 @@
+{
+    "display_name": "Github",
+    "description": "Github external plugin",
+    "logo_file": "Github-Logo.png",
+    "integration_type": "ALM",
+    "is_webhook_at_project_level": false,
+    "instance_properties": [
+        {
+            "title": "Name",
+            "name": "name",
+            "description": "Name of the instance",
+            "type": "input"
+        },
+        {
+            "title": "Username",
+            "name": "Username",
+            "description": "Username of the instance",
+            "type": "input"
+        },
+        {
+            "title": "Email",
+            "name": "email",
+            "description": "Email ID",
+            "type": "input"
+        },
+       
+        
+        {
+            "title": "API Token",
+            "name": "token",
+            "description": "Github user API Token",
+            "type": "input",
+            "format": "password",
+            "required": true
+        },
+        {
+            "title": "URL",
+            "name": "url",
+            "description": "URL, for example: https://github.com/company",
+            "type": "input"
+        },
+        {
+            "title": "Description",
+            "name": "description",
+            "type": "input"
+        }
+    ],
+    "assets_properties": [
+        {
+            "type": "repositories",
+            "title": "github plugin repositories ",
+            "name": "repositories",
+            "description": "To get list of repositories of instance",
+            "is_render_treeview": false,
+            "is_fields_at_project_level": true
+        },
+        {
+            "type": "asset",
+            "name": "issuetype_name",
+            "title": "Issue Types",
+            "description": "List of supported issue types",
+            "dependent_assets": ["projects"]
+        }
+    ],
+    "additional_mapping": {
+        "attachment": {
+            "enabled": true
+        },
+        "comment": {
+            "enabled": true
+        },
+        "relationship": {
+            "enabled": true
+        },
+        "sync_reference": {
+            "enabled": true
+        }
+    }
+}
