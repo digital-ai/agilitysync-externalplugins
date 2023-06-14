@@ -8,7 +8,7 @@ def connect(instance_details):
    return ASyncRestApi(instance_details['url'],headers={
                             "authorization": "Bearer {}".format(instance_details["token"]),
                             "Accept": "application/json",
-                            "Content-Type": "application/json"
+                            
                             })
 
 
@@ -22,45 +22,51 @@ def connect(instance_details):
 def check_connection(instance,instance_details):
     instance_path = "repos"
 
-    path = "{}".format(
+    path = "{}/{}".format(
             DEFAULT.INITIAL_PATH, 
-            )
+            
+            instance_path)
 
     response = instance.get(path)
 
-    if instance_details["Username"] == response["login"]:
+    if "private" in response:
         return "Connection to Github server is successfull."
     else:
         return response
 
-def get_repos(instance,details):
-    instance_path = "repos"
-    path = "{}/{}/{}".format(
-        "orgs", 
-        details["Organization"], 
-        instance_path)
-    response = instance.get(path)
-    return response
 
-def tickets(instance):
-    instance_path = "orgs"
-    path = "{}/{}".format(
+def tickets(instance, id=None, payload=None):
+    instance_path = "issues/{}".format(id) if id else "issues"
+    path = "{}/{}/{}".format(
         DEFAULT.INITIAL_PATH, 
-        ##DEFAULT.REST_ENDPOINT_VERSION, 
+        DEFAULT.REST_ENDPOINT_VERSION, 
         instance_path)
-    response = instance.get(path)
-    return response[0]["url"]
+
+    if payload:
+        response = (instance.put(path, payload)
+                    if id else instance.post(path, payload))
+        return response["issues"]
+    else:
+        response = instance.get(path)
+        return response["issues"]
 
 
 def ticket_fields(instance, id=None, payload=None):
-    tickets = [
-        {
-        'asset':"issues",
-        'display_name': "issues",
-        'id': "Assettype-001"
-        }
-    ]
-    return tickets
+    instance_path = "ticket_fields/{}".format(id) if id else "ticket_fields"
+    path = "{}/{}/{}".format(
+        DEFAULT.INITIAL_PATH, 
+        DEFAULT.REST_ENDPOINT_VERSION, 
+        instance_path)
+
+    if payload:
+        if id:
+            response = instance.put(path, payload)
+        else:
+            response = instance.post(path, payload)
+        return response["ticket_field"]
+    else:
+        response = instance.get(path)
+        return response["ticket_fields"]
 
 
 def get_user_by_email(instance, email):
