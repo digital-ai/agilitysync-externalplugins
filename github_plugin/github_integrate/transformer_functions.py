@@ -3,12 +3,52 @@ import base64
 from external_plugins.github_integrate import default as DEFAULT 
 from agilitysync.external_lib.restapi import ASyncRestApi
 
+fields = [
+    {
+    "required": True,
+    "disabled field": False,
+    "customfield":False,
+    "raw_title": "title",
+    "title":"title",
+    "type":"title",
+    "IsMultivalue" : False
+},
+{
+    "required": False,
+    "disabled field": False,
+    "customfield":False,
+    "raw_title": "assignee",
+    "title":"assignee",
+    "type":"assignee",
+    "IsMultivalue" : False
+},
+{
+    "required": False,
+    "disabled field": False,
+    "customfield":False,
+    "raw_title": "Labels",
+    "title":"labels",
+    "type":"labels",
+    "IsMultivalue" : False
+},
+{
+    "required": False,
+    "disabled field": False,
+    "customfield":False,
+    "raw_title": "Milestone",
+    "title":"milestone",
+    "type":"milestone",
+    "IsMultivalue" : True
+},
 
+]
+def ticfields(self):
+    return fields
 def connect(instance_details):
    return ASyncRestApi(instance_details['url'],headers={
                             "authorization": "Bearer {}".format(instance_details["token"]),
                             "Accept": "application/json",
-                            
+                            "Content-Type": "application/json"
                             })
 
 
@@ -22,51 +62,68 @@ def connect(instance_details):
 def check_connection(instance,instance_details):
     instance_path = "repos"
 
-    path = "{}/{}".format(
+    path = "{}".format(
             DEFAULT.INITIAL_PATH, 
             
-            instance_path)
+            )
 
     response = instance.get(path)
 
-    if "private" in response:
+    if instance_details["Username"] == response["login"]:
         return "Connection to Github server is successfull."
     else:
         return response
+def get_field_value(instance,details,repo):
+    instance_path = "milestones"
+    path = "{}/{}/{}/{}".format(
+        "repos",
+        details["Organization"],repo,
+         instance_path)
+    response = instance.get(path)
+    return response
 
+def get_org(instance):
+    instance_path = "orgs"
+    path = "{}/{}".format(
+        "user", 
+         instance_path)
+    response = instance.get(path)
+    return response
 
-def tickets(instance, id=None, payload=None):
-    instance_path = "issues/{}".format(id) if id else "issues"
+def get_repos(instance,details):
+    instance_path = "repos"
     path = "{}/{}/{}".format(
-        DEFAULT.INITIAL_PATH, 
-        DEFAULT.REST_ENDPOINT_VERSION, 
+        "orgs", 
+        details["Organization"], 
         instance_path)
+    response = instance.get(path)
+    return response
 
+def tickets(instance,payload,repo,details,id=None):
+    instance_path = "issues/{}".format(id) if id else ""
+    path = "{}/{}/{}/{}".format(
+        "repos", 
+         details["Organization"], 
+        repo,"issues"
+        )
     if payload:
-        response = (instance.put(path, payload)
+        response = (instance.patch(path, payload)
                     if id else instance.post(path, payload))
-        return response["issues"]
+        return response
     else:
         response = instance.get(path)
-        return response["issues"]
+        return response
 
 
 def ticket_fields(instance, id=None, payload=None):
-    instance_path = "ticket_fields/{}".format(id) if id else "ticket_fields"
-    path = "{}/{}/{}".format(
-        DEFAULT.INITIAL_PATH, 
-        DEFAULT.REST_ENDPOINT_VERSION, 
-        instance_path)
-
-    if payload:
-        if id:
-            response = instance.put(path, payload)
-        else:
-            response = instance.post(path, payload)
-        return response["ticket_field"]
-    else:
-        response = instance.get(path)
-        return response["ticket_fields"]
+    tickets = [
+        {
+        'asset':"issues",
+        'display_name': "issues",
+        'id': "Assettype-001"
+        }
+    ]
+    return tickets
 
 
 def get_user_by_email(instance, email):
@@ -80,11 +137,12 @@ def get_user_by_email(instance, email):
     return response
 
 
-def webhooks(instance, id=None, payload=None):
-    instance_path = "webhooks/{}".format(id) if id else "webhooks"
-    path = "{}/{}/{}".format(
-        DEFAULT.INITIAL_PATH, 
-        DEFAULT.REST_ENDPOINT_VERSION, 
+def webhooks(instance,instance_details,repo, id=None, payload=None):
+    instance_path = "hooks"
+    path = "{}/{}/{}/{}".format(
+        "repos", 
+        instance_details["Organization"],
+        repo, 
         instance_path)
 
     if payload:
@@ -92,10 +150,10 @@ def webhooks(instance, id=None, payload=None):
             response = instance.put(path, payload)
         else:
             response = instance.post(path, payload)
-        return response["webhook"]
+        return response
     else:
         response = instance.get(path)
-        return response["webhooks"]
+        return response
 
 
 def trigger_categories(instance, id=None, payload=None):
