@@ -1,4 +1,4 @@
-REST_ENDPOINT_VERSION = "orgs"
+REST_ENDPOINT_VERSION = "issues"
 
 INITIAL_PATH = "user"
 

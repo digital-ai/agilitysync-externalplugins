@@ -13,20 +13,19 @@ import re
 from datetime import datetime
 from dateutil import parser
 import time
-import json
 from external_plugins.github_integrate import transformer_functions
 
 
 class Payload(BasePayload):
 
     def fetch_project(self, event):
-        
-        return int(event["repository"]["id"])
+        return "no_project"
+
     def fetch_asset(self, event):
-        return "Assettype-001"
+        return event['ticket']["type"].lower()
 
     def is_cyclic_event(self, event, sync_user):
-        return bool(event['sender']['login'] == str(sync_user))
+        return bool(event['user']['id'] == str(sync_user))
 
 
 class Event(BaseEvent):
@@ -34,30 +33,30 @@ class Event(BaseEvent):
     def fetch_event_type(self):
         event_type = self.event['action']
 
-        if event_type in ('opened'):
+        if event_type in ('ticket_created',):
             return EventTypes.CREATE
-        elif event_type == ('closed'):
+        elif event_type == 'ticket_deleted':
             return EventTypes.DELETE
-        elif event_type in ('edited',):
+        elif event_type in ('ticket_updated', 'comment_created'):
             return EventTypes.UPDATE
 
         error_msg = 'Unsupported event type [{}]'.format(event_type)
         raise as_exceptions.PayloadError(error_msg)
 
     def fetch_workitem_id(self):
-        return self.event['issue']['id']
+        return self.event['ticket']['id']
 
     def fetch_workitem_display_id(self):
-        return self.event['issue']['id']
+        return self.event['ticket']['id']
 
     def fetch_workitem_url(self):
-        return "/".join(self.event['issue']['url'].split("/")[1:])
+        return "/".join(self.event['ticket']['url'].split("/")[1:])
 
     def fetch_revision(self):
-        return self.event['issue']["updated_at"]
+        return self.event['ticket']['updated_at_with_timestamp']
 
     def fetch_timestamp(self):
-        timestamp = parser.parse(self.event['issue']["updated_at"])
+        timestamp = parser.parse(self.event['ticket']["updated_at_with_timestamp"])
 
         return datetime.fromtimestamp(time.mktime(timestamp.utctimetuple())) # type: ignore
 
@@ -73,9 +72,9 @@ class Inbound(BaseInbound):
             raise as_exceptions.InboundError(error_msg, stack_trace=True)
 
     def is_comment_updated(self, updated_at_with_time, latest_public_comment_html):
-        
-        
-        found_pattern = re.search(updated_at_with_time, latest_public_comment_html)
+        updated_comment_epoch = datetime.strptime(updated_at_with_time, "%B %d, %Y at %H:%M").timestamp()
+        search_pattern = datetime.fromtimestamp(updated_comment_epoch).strftime('%b %-d, %Y, %H:%M')
+        found_pattern = re.search(search_pattern, latest_public_comment_html)
         if found_pattern:
             return True
         else:
@@ -86,12 +85,10 @@ class Inbound(BaseInbound):
 
         event_type = self.event["action"]
 
-        if event_type in ('opened', 'closed', 'edited',):
+        if event_type in ('ticket_created', 'ticket_updated', 'ticket_deleted'):
             category.append(EventCategory.WORKITEM)
-        
-        
 
-        if self.is_comment_updated(self.event["issue"]["updated_at"], self.event["issue"]["comments_url"]):
+        if self.is_comment_updated(self.event["ticket"]["updated_at_with_time"], self.event["ticket"]["latest_public_comment_html"]):
             category.append(EventCategory.COMMENT)
 
             if "Attachment(s):" in self.event['ticket']['latest_comment_html']:
@@ -126,7 +123,8 @@ class Outbound(BaseOutbound):
         for outbound_field in transfome_field_objs:
             field_name = outbound_field.name
 
-            
+            if field_name in ["Assignee"]:  # Temp skip
+                continue
 
             field_value = outbound_field.value
             create_fields[field_name.lower()] = field_value
@@ -136,36 +134,27 @@ class Outbound(BaseOutbound):
         return create_fields
 
     def create(self, sync_fields):
-        assignee ="{}".format(sync_fields['assignee']) if sync_fields['assignee'] else " "
-        
-        try: 
+        try:
             payload = {
-                "title": sync_fields['title'],
-                "body":" ",
-                "assignees": [
-                    " "
-                ],
-                "milestone": 1,
-                "labels": [
-                    "bug"
-                ]
-                }
+                "ticket": sync_fields
+            }
 
-            ticket = transformer_functions.tickets(self.instance_object
-                                         ,payload =payload, details=self.instance_details,repo =self.project_info["display_name"])
-            
+            ticket = transformer_functions.tickets(self.instance_object, payload=
+                                                   payload)
             sync_info = {
-                "project":  self.project_info["project"],
-                "issuetype": "issues",
+                "project": ticket["external_id"],
+                "issuetype": ticket["type"],
                 "synced_fields": sync_fields
             }
             xref_object = {
-                "relative_url": "{}/{}/{}/{}/{}".format("repos",self.instance_details["Organization"],self.project_info["display_name"],"issues",ticket["number"]),
+                "relative_url": "/agent/tickets/{}".format(ticket["id"]),
                 'id': str(ticket["id"]),
                 'display_id': str(ticket["id"]),
                 'sync_info': sync_info,
             }
-            xref_object["absolute_url"] = ticket["repository_url"]
+            xref_object["absolute_url"] = "{}{}".format(
+                self.instance_details["url"].rstrip("/"),
+                xref_object["relative_url"])
             return xref_object
 
         except Exception as e:
@@ -176,11 +165,11 @@ class Outbound(BaseOutbound):
     def update(self, sync_fields):
         try:
             payload = {
-                sync_fields
+                "ticket": sync_fields
             }
 
-            transformer_functions.tickets(self.instance_object
-                                         ,payload=payload, details=self.instance_details,repo =self.project_info["display_name"], ) 
+            transformer_functions.tickets(self.instance_object,
+                                          id=self.workitem_id, payload=payload)
 
         except Exception as e:
             error_msg = ('Unable to sync fields in Github. Error is [{}]. Trying to sync fields \n'
@@ -190,13 +179,15 @@ class Outbound(BaseOutbound):
     def comment_create(self, comment):
         try:
             payload = {
-                
-                "body": comment
-            
+                "ticket": {
+                    "comment": {
+                        "body": comment
+                    }
+                }
             }
 
-            ##transformer_functions.tickets(self.instance_object,
-                                         ## id=self.workitem_id, payload=payload)
+            transformer_functions.tickets(self.instance_object,
+                                          id=self.workitem_id, payload=payload)
         except Exception as e:
             error_msg = 'Unable to sync comment. Error is [{}]. The comment is [{}]'.format(str(e), comment)
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
