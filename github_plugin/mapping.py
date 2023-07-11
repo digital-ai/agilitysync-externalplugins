@@ -15,8 +15,13 @@ import external_plugins.github_integrate.default as DEFAULT
 from agilitysync.external_lib.restapi import ASyncRestApi
 
 class Field(BaseField):
+    
+
     def is_required_field(self):
-        return self.field_attr["required"]
+        if self.field_attr["required"] is True:
+            return True
+        else:
+            return False
 
     def is_disabled_field(self):
         return False
@@ -25,9 +30,7 @@ class Field(BaseField):
         return True if "custom_field_options" in self.field_attr else False
 
     def is_readonly_field(self):
-        if self.field_attr["type"] == "assignee":
-            return self.field_attr["editable_in_portal"]
-        return not self.field_attr["editable_in_portal"]
+        return False
 
     def fetch_name(self):
         return self.field_attr["raw_title"]
@@ -36,7 +39,21 @@ class Field(BaseField):
         return self.field_attr["title"]
 
     def is_multivalue_field(self):
-        return False  # self.field_attr["IsMultivalue"]
+        if self.field_attr["IsMultivalue"]:
+            return True
+        else:
+            return False
+    def _field_type_info(self, field_type, display_image, values=None, value_type=None):
+        field_type_doc = {"type": field_type}
+
+        if values is not None and value_type is not None:
+            field_type_doc["value_type"] = value_type
+            field_type_doc["values"] = values
+
+        if display_image:
+            field_type_doc["display_icon"] = display_image
+
+        return field_type_doc  
 
     def fetch_fieldtype_info(self):
         fields_type = {
@@ -50,122 +67,101 @@ class Field(BaseField):
             "PARTIALCREDITCARD": "partialcreditcard",
             "MULTISELECT": "multiselect",
             "TAGGER": "tagger",
-            "LOOKUP": "lookup"
+            "LOOKUP": "lookup",
+            "RELATION": "Relation"
         }
-
         fields = {
-            "subject": {
+            "title": {
                 "type": fields_type["TEXT"],
-                "system": "subject"
-            },
-            "description": {
-                "type": fields_type["TEXT"],
-                "system": "description"
-            },
-            "status": {
-                "type": fields_type["TEXT"],
-                "system": "status"
-            },
-            "tickettype": {
-                "type": fields_type["TEXT"],
-                "system": "tickettype"
-            },
-            "priority": {
-                "type": fields_type["TEXT"],
-                "system": "priority"
-            },
-            "group": {
-                "type": fields_type["TEXT"],
-                "system": "group"
-            },
+                "system": "title"
+            }, 
+            
             "assignee": {
                 "type": fields_type["TEXT"],
                 "system": "assignee"
             },
-            "tagger": {
+            "labels": {
                 "type": fields_type["TEXT"],
-                "system": "tagger"
+                "system": "labels"
             },
-            "custom_status": {
-                "type": fields_type["TEXT"],
-                "system": "custom_status"
+            "milestone": {
+                "type": fields_type["RELATION"],
+                "system": "milestone"
             }
         }
-        attribute_type = fields[self.field_attr['type']]["type"].capitalize()
+        
+        
+        
+        attribute_type = fields[self.field_attr['type']]['type'].capitalize()
 
         if attribute_type == 'Text':
-            return {"type": FieldTypes.TEXT, "display_icon": FieldDisplayIcon.TEXT}
-        elif attribute_type == 'LongText':
-            return {"type": FieldTypes.HTML, "display_icon": FieldDisplayIcon.HTML}
-        elif attribute_type == 'Numeric':
-            return {"type": FieldTypes.NUMERIC, "display_icon": FieldDisplayIcon.NUMERIC}
+            return self._field_type_info(FieldTypes.TEXT,  FieldDisplayIcon.TEXT)
         elif attribute_type == 'Relation':
-            return {
-                "type": FieldTypes.LIST,
-                "display_icon": FieldDisplayIcon.DROPDOWN,
-                "values": [
-                    {"id": "Status_123", "value": "Status_123", "display_value": "Open"},
-                    {"id": "Status_124", "value": "Status_124", "display_value": "In Progress"}
-                ],
-                "value_type": FieldDisplayIcon.TEXT
-            }
-
+            list =transformer_functions.get_field_value(self.instance_obj,details=self.instance_details,repo=self.fields_obj.project_info['display_name'],org = self.fields_obj.query_params["organization"]['display_name'] )
+            value_list = []
+            for values in list:
+                 value_list.append({"id": values["id"], "value": values["title"], "display_value": values["title"]})
+            return self._field_type_info(
+                FieldTypes.LIST,
+                FieldDisplayIcon.DROPDOWN,
+                value_list,
+                FieldTypes.TEXT
+            )
 
 class Fields(BaseFields):
 
     def fetch_fields(self):
-        fields = transformer_functions.ticket_fields(self.instance_obj)
+        fields = transformer_functions.ticfields(self.instance_obj)
         return fields
 
 
 class AssetsManage(BaseAssetsManage):
-
+    org = ''
+    def fetch_org(self):
+        response_orgs= transformer_functions.get_org(self.instance_obj)
+        orgs = []
+        for org in response_orgs:
+            orgs.append(
+                {
+                    'id': org['id'],
+                    "organization": org["login"],
+                    'display_name': org['login'],
+                }
+            )
+        return orgs
     def connect(self):
         return transformer_functions.connect(
             self.instance_details
         )
-
-    ##def fetch_sync_user(self):
-        #user = transformer_functions.get_user_by_email(
-            #self.instance_obj,
-            #self.instance_details['email'])
-        #return user["results"][0]["id"]
-
+    def fetch_sync_user(self):
+        user = self.instance_details["Username"]
+        return user
     def fetch_projects(self):
-        projects = [
-            {
-                'id': 'no_project',
-                'display_name': 'No Projects',
-                "project": "no_project"
-            }
-        ]
+        org = self.query_params["organization"]["display_name"]
+        response_repos= transformer_functions.get_repos(self.instance_obj,org)
+        projects = [ ]
+        for project in response_repos:
+            projects.append(
+                {
+                    'id': str(project['name']),
+                    "project": org + "/" + str(project["id"]),
+                    'display_name': project['name'],
+                    'parent_id':org
+                }
+            )
         return projects
-
     def fetch_assets(self):
-        asset_types = []
+        org = self.query_params
+        asset_types = [org]
         for field in transformer_functions.ticket_fields(self.instance_obj):
-            if field["type"] == "tickettype":
-                for option in field["system_field_options"]:
+            
                     asset_types.append(
                         {
-                            "id": option["value"],
-                            "asset": option["value"],
-                            "display_name": option["value"].title(),
+                            "id": field["id"],
+                            "asset": field["id"],
+                            "display_name": field["display_name"],
                         })
         return asset_types
-
-    def is_instance_supported(self):
-        tickets_data = transformer_functions.tickets(self.instance_obj)
-
-        if tickets_data:
-            tik_url = tickets_data[0].get("url")
-            if (DEFAULT.REST_ENDPOINT_VERSION in tik_url.split("/")):
-                return (True, None)
-            else:
-                return (False, None)
-        else:
-            return (True, None)
-
     def test_connection(self):
         try:
             return transformer_functions.check_connection(self.instance_obj,self.instance_details)
@@ -173,23 +169,30 @@ class AssetsManage(BaseAssetsManage):
             raise as_exceptions.SanitizedPluginError("Unknown error connecting to GIthub Plugin integration system.", str(ex))
 
 class WebHook(BaseWebHook):
-
-    def create_webhook(self, webhook_name, webhook_url, webhook_description):
+    
+    def create_webhook(self, webhook_name, webhook_url,webhook_description,project_id):
+       
         payload = {
-            "webhook": {
-                "endpoint": "{}".format(webhook_url),
-                "http_method": "POST",
-                "name": "{}".format(webhook_name),
-                "status": "active",
-                "request_format": "json",
-                "subscriptions": ["conditional_ticket_events"]
-            }
-        }  # Payload data to create single webhook
-
-        webhook_data = transformer_functions.webhooks(self.instance_obj,
-                                                      payload=payload)  # Creating webhook
-        category_id = self.create_trigger_categories()  # Creating trigger category
-        self.create_triggers(webhook_data["id"], category_id)  # Creating triggers
+            
+           
+                        "name": "web",
+                        "active": True,
+                         "events": [
+                                        "issues"
+                                    ],
+                        "config": {
+                                        "url": webhook_url,
+                                        "content_type": "json",
+                                        "insecure_ssl": "0" 
+                        }
+                        
+                }  # Payload data to create single webhook
+       
+        for project in self.projects_info:
+            transformer_functions.webhooks(self.instance_obj,self.instance_details,repo = project['display_name'],id = project['id']
+                                                      ,payload=payload)  # Creating webhook
+        #category_id = self.create_trigger_categories()  # Creating trigger category
+        #self.create_triggers(webhook_data["id"])  # Creating triggers
 
     def create_trigger_categories(self):
         trigger_category_exist_list = transformer_functions.trigger_categories(self.instance_obj)

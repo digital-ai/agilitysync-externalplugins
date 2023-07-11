@@ -3,7 +3,7 @@
     "description": "Github external plugin",
     "logo_file": "Github-Logo.png",
     "integration_type": "ALM",
-    "is_webhook_at_project_level": false,
+    "is_webhook_at_project_level": true,
     "instance_properties": [
         {
             "title": "Name",
@@ -17,13 +17,6 @@
             "description": "Username of the instance",
             "type": "input"
         },
-        {
-            "title": "Email",
-            "name": "email",
-            "description": "Email ID",
-            "type": "input"
-        },
-       
         
         {
             "title": "API Token",
@@ -46,25 +39,37 @@
         }
     ],
     "assets_properties": [
+        
         {
-            "type": "repositories",
-            "title": "github plugin repositories ",
-            "name": "repositories",
-            "description": "To get list of repositories of instance",
-            "is_render_treeview": false,
-            "is_fields_at_project_level": true
+            "type":"custom",
+            "title":"organization",
+            "name":"organization",
+            "description":"To get the organization",
+            "api":"fetch_org"
         },
+        
         {
-            "type": "asset",
+            "type": "project",
+            "title": " Projects",
+            "name": "projects",
+            "description": "To get the projects",
+            "is_render_treeview": true,
+            "max_projects": 10,
+            "is_fields_at_project_level": true,
+            "dependent_assets": ["organization"]
+        },
+       
+        {
+            "type": "asset", 
             "name": "issuetype_name",
             "title": "Issue Types",
-            "description": "List of supported issue types",
-            "dependent_assets": ["projects"]
+            "description": "To get the assets",
+            "dependent_assets": ["projects","organization"]
         }
     ],
     "additional_mapping": {
         "attachment": {
-            "enabled": true
+            "enabled": true 
         },
         "comment": {
             "enabled": true
@@ -73,6 +78,13 @@
             "enabled": true
         },
         "sync_reference": {
+            "enabled": true
+        },
+        
+        "missing_events": {
+            "enabled": true
+        },
+        "data_migration": {
             "enabled": true
         }
     }
