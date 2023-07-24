@@ -71,8 +71,8 @@ def check_connection(instance,instance_details):
         return response["message"]
 def get_field_value(instance,details,repo,org):
     instance_path = "milestones"
-     
-    
+    orgsplit = org.split('/')
+    org = orgsplit[0]
     path = "{}/{}/{}/{}".format(
         "repos",
         org,repo,
@@ -108,8 +108,8 @@ def tickets(instance,payload,repo,details,id=None):
         repo,"issues"
         )
     if payload:
-        response = (instance.patch(path, payload)
-                    if id else instance.post(path, payload))
+        response = instance.post(path, payload)
+                   
         return response
     else:
         response = instance.get(path)

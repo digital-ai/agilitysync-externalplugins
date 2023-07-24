@@ -125,20 +125,13 @@ class Outbound(BaseOutbound):
         create_fields = {}
 
         for outbound_field in transfome_field_objs:
-            field_name = outbound_field.name
 
-            
-
-            field_value = outbound_field.value
-            create_fields[field_name.lower()] = field_value
-
+            create_fields[outbound_field.name.lower()] =outbound_field.value 
         create_fields["type"] = self.asset_info["asset"]
-
         return create_fields
 
     def create(self, sync_fields):
-        assignee ="{}".format(sync_fields['assignee']) if sync_fields['assignee'] else " "
-        
+
         try: 
             payload = {
                 "title": sync_fields['title'],
@@ -153,7 +146,9 @@ class Outbound(BaseOutbound):
                 }
 
             ticket = transformer_functions.tickets(self.instance_object
-                                         ,payload =payload, details=self.instance_details,repo =self.project_info["display_name"],id =self.project_info["id"])
+                                         ,payload =payload, details=self.instance_details,repo =self.project_info["display_name"],id =self.project_info["project"])
+            orgsplit = self.project_info["project"].split('/')
+            org = orgsplit[0]
             
             sync_info = {
                 "project":  self.project_info["project"],
@@ -161,7 +156,7 @@ class Outbound(BaseOutbound):
                 "synced_fields": sync_fields
             }
             xref_object = {
-                "relative_url": "{}/{}/{}/{}/{}".format("repos",self.instance_details["Organization"],self.project_info["display_name"],"issues",ticket["number"]),
+                "relative_url": "{}/{}/{}/{}/{}".format("repos",org,self.project_info["display_name"],"issues",ticket["number"]),
                 'id': str(ticket["id"]),
                 'display_id': str(ticket["id"]),
                 'sync_info': sync_info,

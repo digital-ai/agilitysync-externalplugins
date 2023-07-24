@@ -94,10 +94,10 @@ class Field(BaseField):
         
         attribute_type = fields[self.field_attr['type']]['type'].capitalize()
 
-        if attribute_type == 'Text':
+        if attribute_type == "Text":
             return self._field_type_info(FieldTypes.TEXT,  FieldDisplayIcon.TEXT)
-        elif attribute_type == 'Relation':
-            list =transformer_functions.get_field_value(self.instance_obj,details=self.instance_details,repo=self.fields_obj.project_info['display_name'],org = self.fields_obj.query_params["organization"]['display_name'] )
+        elif attribute_type == "Relation":
+            list =transformer_functions.get_field_value(self.instance_obj,details=self.instance_details,repo=self.fields_obj.project_info['display_name'],org = self.fields_obj.project_info['project'] )
             value_list = []
             for values in list:
                  value_list.append({"id": values["id"], "value": values["title"], "display_value": values["title"]})
@@ -116,26 +116,29 @@ class Fields(BaseFields):
 
 
 class AssetsManage(BaseAssetsManage):
-    org = ''
+    
     def fetch_org(self):
         response_orgs= transformer_functions.get_org(self.instance_obj)
         orgs = []
         for org in response_orgs:
             orgs.append(
                 {
-                    'id': org['id'],
+                    "id": org["id"],
                     "organization": org["login"],
-                    'display_name': org['login'],
+                    "display_name": org["login"],
                 }
             )
         return orgs
+    
     def connect(self):
         return transformer_functions.connect(
             self.instance_details
         )
+    
     def fetch_sync_user(self):
         user = self.instance_details["Username"]
         return user
+    
     def fetch_projects(self):
         org = self.query_params["organization"]["display_name"]
         response_repos= transformer_functions.get_repos(self.instance_obj,org)
@@ -150,6 +153,7 @@ class AssetsManage(BaseAssetsManage):
                 }
             )
         return projects
+    
     def fetch_assets(self):
         org = self.query_params
         asset_types = [org]
@@ -162,6 +166,7 @@ class AssetsManage(BaseAssetsManage):
                             "display_name": field["display_name"],
                         })
         return asset_types
+    
     def test_connection(self):
         try:
             return transformer_functions.check_connection(self.instance_obj,self.instance_details)
@@ -173,8 +178,7 @@ class WebHook(BaseWebHook):
     def create_webhook(self, webhook_name, webhook_url,webhook_description,project_id):
        
         payload = {
-            
-           
+
                         "name": "web",
                         "active": True,
                          "events": [
