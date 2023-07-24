@@ -17,7 +17,6 @@
             "description": "Username of the instance",
             "type": "input"
         },
-        
         {
             "title": "API Token",
             "name": "token",

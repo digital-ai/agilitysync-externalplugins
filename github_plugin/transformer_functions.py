@@ -1,6 +1,6 @@
 import base64
 
-from external_plugins.github_integrate import default as DEFAULT 
+from external_plugins.github_plugin import default as DEFAULT 
 from agilitysync.external_lib.restapi import ASyncRestApi
 
 fields = [
@@ -138,7 +138,7 @@ def get_user_by_email(instance, email):
     return response
 
 
-def webhooks(instance,instance_details,repo, id=None, payload=None):
+def webhooks(instance,repo, id, payload=None):
     instance_path = "hooks"
     orgsplit = id.split('/')
     org = orgsplit[0]

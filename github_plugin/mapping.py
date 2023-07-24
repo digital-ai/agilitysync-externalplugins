@@ -9,8 +9,8 @@ from agilitysync.mapping import (
     FieldDisplayIcon
 )
 
-from external_plugins.github_integrate import transformer_functions
-import external_plugins.github_integrate.default as DEFAULT
+from external_plugins.github_plugin import transformer_functions
+import external_plugins.github_plugin.default as DEFAULT
 
 from agilitysync.external_lib.restapi import ASyncRestApi
 
@@ -189,10 +189,8 @@ class WebHook(BaseWebHook):
                 }  # Payload data to create single webhook
        
         for project in self.projects_info:
-            transformer_functions.webhooks(self.instance_obj,self.instance_details,repo = project['display_name'],id = project['id']
-                                                      ,payload=payload)  # Creating webhook
-        #category_id = self.create_trigger_categories()  # Creating trigger category
-        #self.create_triggers(webhook_data["id"])  # Creating triggers
+            transformer_functions.webhooks(self.instance_obj,repo = project['display_name'],id = project['project']
+                                                      ,payload=payload)  
 
     def create_trigger_categories(self):
         trigger_category_exist_list = transformer_functions.trigger_categories(self.instance_obj)

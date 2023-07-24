@@ -14,7 +14,7 @@ from datetime import datetime
 from dateutil import parser
 import time
 import json
-from external_plugins.github_integrate import transformer_functions
+from external_plugins.github_plugin import transformer_functions
 
 
 class Payload(BasePayload):
@@ -196,8 +196,7 @@ class Outbound(BaseOutbound):
             
             }
 
-            ##transformer_functions.tickets(self.instance_object,
-                                         ## id=self.workitem_id, payload=payload)
+            
         except Exception as e:
             error_msg = 'Unable to sync comment. Error is [{}]. The comment is [{}]'.format(str(e), comment)
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
