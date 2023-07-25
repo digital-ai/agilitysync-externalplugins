@@ -1,0 +1,91 @@
+{
+    "display_name": "Gitlab",
+    "description": "Gitlab external plugin",
+    "logo_file": "Gitlab-Logo.png",
+    "integration_type": "ALM",
+    "is_webhook_at_project_level": true,
+    "instance_properties": [
+        {
+            "title": "Name",
+            "name": "name",
+            "description": "Name of the instance",
+            "type": "input"
+        },
+        {
+            "title": "Username",
+            "name": "Username",
+            "description": "Username of the instance",
+            "type": "input"
+        },
+        
+        {
+            "title": "API Token",
+            "name": "token",
+            "description": "Gitlab user API Token",
+            "type": "input",
+            "format": "password",
+            "required": true
+        },
+        {
+            "title": "URL",
+            "name": "url",
+            "description": "URL, for example: https://gitlab.com/com",
+            "type": "input"
+        },
+        {
+            "title": "Description",
+            "name": "description",
+            "type": "input"
+        }
+    ],
+    "assets_properties": [
+        
+        {
+            "type":"custom",
+            "title":"organization",
+            "name":"organization",
+            "description":"To get the Group",
+            "api":"fetch_org"
+        },
+        
+        {
+            "type": "project",
+            "title": " Projects",
+            "name": "projects",
+            "description": "To get the projects",
+            "is_render_treeview": true,
+            "max_projects": 10,
+            "is_fields_at_project_level": true,
+            "dependent_assets": ["organization"]
+        },
+       
+        {
+            "type": "asset", 
+            "name": "issuetype_name",
+            "title": "Issue Types",
+            "description": "To get the assets",
+            "dependent_assets": ["projects","organization"]
+        }
+    ],
+    "additional_mapping": {
+        "attachment": {
+            "enabled": true 
+        },
+        "comment": {
+            "enabled": true
+        },
+        "relationship": {
+            "enabled": true
+        },
+        "sync_reference": {
+            "enabled": true
+        },
+        
+        "missing_events": {
+            "enabled": true
+        },
+        "data_migration": {
+            "enabled": true
+        }
+    }
+}
