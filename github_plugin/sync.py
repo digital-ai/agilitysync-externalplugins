@@ -123,10 +123,16 @@ class Outbound(BaseOutbound):
 
     def transform_fields(self, transfome_field_objs):
         create_fields = {}
+        
 
         for outbound_field in transfome_field_objs:
-
-            create_fields[outbound_field.name.lower()] =outbound_field.value 
+            create_fields.setdefault(outbound_field.name.lower(),[])
+            if outbound_field.is_multivalue:
+                for val in outbound_field.value[0]:
+                    create_fields[outbound_field.name.lower()].append(val[0])
+            else:
+                create_fields[outbound_field.name.lower()] =outbound_field.value 
+                    
         create_fields["type"] = self.asset_info["asset"]
         return create_fields
 
@@ -146,7 +152,7 @@ class Outbound(BaseOutbound):
                 }
 
             ticket = transformer_functions.tickets(self.instance_object
-                                         ,payload =payload, details=self.instance_details,repo =self.project_info["display_name"],id =self.project_info["project"])
+                                         ,payload =sync_fields, details=self.instance_details,repo =self.project_info["display_name"],id =self.project_info["project"])
             orgsplit = self.project_info["project"].split('/')
             org = orgsplit[0]
             

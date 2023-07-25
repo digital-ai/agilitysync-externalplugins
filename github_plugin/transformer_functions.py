@@ -21,7 +21,7 @@ fields = [
     "raw_title": "assignee",
     "title":"assignee",
     "type":"assignee",
-    "IsMultivalue" : False
+    "IsMultivalue" : True
 },
 {
     "required": False,
@@ -30,7 +30,7 @@ fields = [
     "raw_title": "Labels",
     "title":"labels",
     "type":"labels",
-    "IsMultivalue" : False
+    "IsMultivalue" : True
 },
 {
     "required": False,
