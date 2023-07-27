@@ -22,7 +22,7 @@ class Payload(BasePayload):
     def fetch_project(self, event):
         project = str(event["repository"]["id"])
         org = event['organization']['login']
-        return project + "/" +org
+        return org + "/" + project
     def fetch_asset(self, event):
         return "Assettype-001"
 
@@ -129,7 +129,7 @@ class Outbound(BaseOutbound):
             create_fields.setdefault(outbound_field.name.lower(),[])
             if outbound_field.is_multivalue:
                 for val in outbound_field.value[0]:
-                    create_fields[outbound_field.name.lower()].append(val[0])
+                    create_fields[outbound_field.name.lower()].append(val[1])
             else:
                 create_fields[outbound_field.name.lower()] =outbound_field.value 
                     
