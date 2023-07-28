@@ -76,8 +76,6 @@ class Field(BaseField):
                 "type": fields_type["TEXT"],
                 "system": "title"
             }, 
-            
-            
             "labels": {
                 "type": fields_type["TEXT"],
                 "system": "labels"
@@ -92,9 +90,6 @@ class Field(BaseField):
             },
             
         }
-        
-        
-        
         attribute_type = fields[self.field_attr['type']]['type'].capitalize()
 
         if attribute_type == 'Text':
@@ -121,7 +116,7 @@ class Fields(BaseFields):
 
 
 class AssetsManage(BaseAssetsManage):
-    org = ''
+    
     def fetch_org(self):
         response_orgs= transformer_functions.get_org(self.instance_obj)
         orgs = []
@@ -160,7 +155,7 @@ class AssetsManage(BaseAssetsManage):
         return projects
     
     def fetch_assets(self):
-        org = self.query_params
+        
         asset_types = []
         for field in transformer_functions.ticket_fields(self.instance_obj):
             
