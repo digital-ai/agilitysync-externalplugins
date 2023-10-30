@@ -54,7 +54,14 @@ class Field(BaseField):
         if display_image:
             field_type_doc["display_icon"] = display_image
 
-        return field_type_doc  
+        return field_type_doc
+    def get_field_value(self,field_type,id,asset):
+        if field_type == "color":
+            colors = ["Red","Blue","Green","Orange","Purple"]
+            return colors
+        else:
+            list = transformer_functions.get_fields_values(self.instance_obj,field_type)
+
 
     def fetch_fieldtype_info(self):
         fields_type = {
@@ -69,7 +76,8 @@ class Field(BaseField):
             "MULTISELECT": "multiselect",
             "TAGGER": "tagger",
             "LOOKUP": "lookup",
-            "RELATION": "Relation"
+            "RELATION": "Relation",
+            "BOOLEAN":"Boolean"
         }
         fields = {
             "title": {
@@ -80,6 +88,10 @@ class Field(BaseField):
                 "type": fields_type["TEXT"],
                 "system": "labels"
             },
+            # "color": {
+            #     "type": fields_type["RELATION"],
+            #     "system": "color"
+            # },
             "weight": {
                 "type": fields_type["INTEGER"],
                 "system": "weight"
@@ -88,6 +100,18 @@ class Field(BaseField):
                 "type": fields_type["TEXT"],
                 "system": "description"
             },
+            "confidential": {
+                "type": fields_type["BOOLEAN"],
+                "system": "confidential"
+            },
+            "start_date_fixed": {
+                "type": fields_type["DATE"],
+                "system": "start_date_fixed"
+            },
+            "due_date_fixed": {
+                "type": fields_type["DATE"],
+                "system": "due_date_fixed"
+            }
             
         }
         attribute_type = fields[self.field_attr['type']]['type'].capitalize()
@@ -95,7 +119,12 @@ class Field(BaseField):
         if attribute_type == 'Text':
             return self._field_type_info(FieldTypes.TEXT,  FieldDisplayIcon.TEXT)
         if attribute_type == 'Integer':
-            return self._field_type_info(FieldTypes.TEXT,  FieldDisplayIcon.TEXT)
+            return self._field_type_info(FieldTypes.NUMERIC, FieldDisplayIcon.NUMERIC)
+        if attribute_type == 'Date':
+            return self._field_type_info(FieldTypes.DATETIME, FieldDisplayIcon.DATETIME)
+        if attribute_type == 'Boolean':
+            return self._field_type_info(FieldTypes.BOOLEAN_LIST, FieldDisplayIcon.BOOLEAN,
+                                         transformer_functions.BOOLEAN_VALUES, FieldTypes.BOOLEAN)
         elif attribute_type == 'Relation':
             list = transformer_functions.get_field_value(self.instance_obj,details=self.instance_details,repo=self.fields_obj.project_info['display_name'],org = self.fields_obj.query_params["organization"]['display_name'] )
             value_list = []
@@ -111,7 +140,12 @@ class Field(BaseField):
 class Fields(BaseFields):
 
     def fetch_fields(self):
-        fields = transformer_functions.ticfields(self.instance_obj)
+        
+        if self.asset_info["display_name"] == "epic":
+            fields = transformer_functions.epicfields()
+
+        else:
+            fields = transformer_functions.ticfields()
         return fields
 
 
@@ -122,12 +156,13 @@ class AssetsManage(BaseAssetsManage):
         orgs = []
         for org in response_orgs:
             orgs.append(
-                {
-                    'id': org['id'],
-                    "organization": org["name"],
-                    'display_name': org['name'],
-                }
-            )
+                    {
+                        'id': org['id'],
+                        "organization": org["name"],
+                        'display_name': org['name'],
+                        
+                    }
+                )
         return orgs
     
     def connect(self):
@@ -147,17 +182,27 @@ class AssetsManage(BaseAssetsManage):
             projects.append(
                 {
                     'id': str(project['name']),
-                    "project": str(self.query_params["organization"]["display_name"]) + "/" + str(project["id"]),
+                    "project": str(project["id"]),
                     'display_name': project['name'],
                     
                 }
             )
+        projects.append({'id': "no_project","project":str(self.query_params["organization"]["id"]) + "/" + "No Project","display_name":"No Project"})
         return projects
     
     def fetch_assets(self):
         
         asset_types = []
-        for field in transformer_functions.ticket_fields(self.instance_obj):
+        proj = self.query_params["projects"][0]
+        if  proj["id"] == "no_project":
+            asset_types.append(
+                        {
+                            "id": "Assettype-002",
+                            "asset": "Assettype-002",
+                            "display_name": "epic",
+                        })
+        else:
+            for field in transformer_functions.ticket_fields(self.instance_obj):
             
                     asset_types.append(
                         {
@@ -171,7 +216,7 @@ class AssetsManage(BaseAssetsManage):
         try:
             return transformer_functions.check_connection(self.instance_obj,self.instance_details)
         except Exception as ex:
-            raise as_exceptions.SanitizedPluginError("Unknown error connecting to GIthub Plugin integration system.", str(ex))
+            raise as_exceptions.SanitizedPluginError("Unknown error connecting to GItlab Plugin integration system.", str(ex))
 
 class WebHook(BaseWebHook):
     
