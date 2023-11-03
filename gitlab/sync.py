@@ -113,12 +113,18 @@ class Inbound(BaseInbound):
         return str(parent_id),old_parent_id
 
     def normalize_texttype_multivalue_field(self, field_value, field_attr):
-        multi_select_field_values = []
+        title = []
+        multi_select_field_values = [{'field_value': title, 'act': "set"}]
+        
+        
+            
         if len(field_value[0]) != 0:
+            
             for value in field_value[0]:
-                    act = 'add' if value['updated_at'] == value['created_at'] else 'remove'
-                    val = {'field_value': value['title'], 'act': act}
-                    multi_select_field_values.append(val)
+                
+                title.append(value['title'])     
+                val = {'field_value': title, 'act': "set"}
+                multi_select_field_values.append(val)
             return multi_select_field_values
         else:
             return multi_select_field_values

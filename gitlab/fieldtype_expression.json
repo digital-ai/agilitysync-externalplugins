@@ -4,7 +4,7 @@
             "multivalue": {
                 "payload_pattern": {
                     "create": "'$.object_attributes.%s' % (self.name)",
-                    "update": "'$.changelog.items[?(@.field==\\'%s\\')]' % (self.name)"
+                    "update": "'$.object_attributes.%s' % (self.name)"
                 },
                 "blank_value": [],
                 "reset_value": [{ "set": [] }]
@@ -12,12 +12,12 @@
             "custom": {
                 "payload_pattern": {
                     "create": "'$.object_attributes.%s' % (self.name)",
-                    "update": "'$.changelog.items[?(@.field==\\'%s\\').toString]' % (self.display_name)"
+                    "update": "'$.object_attributes.%s' % (self.display_name)"
                 },
                 "multivalue": {
                     "payload_pattern": {
                         "create": "'$.object_attributes.%s' % (self.name)",
-                        "update": "'$.changelog.items[?(@.field==\\'%s\\')]' % (self.display_name)"
+                        "update": "'$.object_attributes.%s' % (self.display_name)"
                     },
                     "blank_value": [],
                     "reset_value": [{ "set": [] }]
@@ -31,19 +31,19 @@
             "custom": {
                 "payload_pattern": {
                     "create": "'$.object_attributes.%s' % (self.name)",
-                    "update": "'$.changelog.items[?(@.field==\\'%s\\').toString]' % (self.display_name)"
+                    "update": "'$.object_attributes.%s' % (self.display_name)"
                 }
             },
             "payload_pattern": {
                 "create": "'$.object_attributes.%s' % (self.name)",
-                "update": "'$.changelog.items[?(@.field==\\'%s\\').toString]' % (self.name)"
+                "update": "'$.object_attributes.%s' % (self.name)"
             }
         }
     },
     "default": {
         "payload_pattern": {
             "create": "'$.object_attributes.%s' % (self.name)",
-            "update": "'$.changelog.items[?(@.field==\\'%s\\').toString]' % (self.name)"
+            "update": "'$.object_attributes.%s' % (self.name)"
         },
         "blank_value": null,
         "reset_value": null
