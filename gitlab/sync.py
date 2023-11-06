@@ -25,7 +25,7 @@ class Payload(BasePayload):
         project = str(event["project"]["id"])
         org = event['project']['namespace']
         return project
-    
+
     def fetch_asset(self, event):
         return "Assettype-001"
 
@@ -63,22 +63,21 @@ class Event(BaseEvent):
     def fetch_timestamp(self):
         timestamp = parser.parse(self.event['object_attributes']["updated_at"])
 
-        return datetime.fromtimestamp(time.mktime(timestamp.utctimetuple())) # type: ignore
+        return datetime.fromtimestamp(time.mktime(timestamp.utctimetuple()))  # type: ignore
 
 
 class Inbound(BaseInbound):
     def connect(self):
         try:
             return transformer_functions.connect(
-                                                self.instance_details
+                self.instance_details
             )
         except Exception as e:
             error_msg = 'Connection to Gitlab plugin failed.  Error is [{}].'.format(str(e))
             raise as_exceptions.InboundError(error_msg, stack_trace=True)
 
     def is_comment_updated(self, updated_at_with_time, latest_public_comment_html):
-        
-        
+
         found_pattern = re.search(updated_at_with_time, latest_public_comment_html)
         if found_pattern:
             return True
@@ -92,45 +91,46 @@ class Inbound(BaseInbound):
 
         if event_type in ('open', 'close', 'update'):
             category.append(EventCategory.WORKITEM)
-        
-        
 
-        ##if self.is_comment_updated(self.event["object_attributes"]["updated_at"], self.event["issue"]["comments_url"]):
-            #category.append(EventCategory.COMMENT)
-
-            ##if "Attachment(s):" in self.event['ticket']['latest_comment_html']:
-               #category.append(EventCategory.ATTACHMENT)
 
         return category
 
     def fetch_parent_id(self):
         parent_id = None
         old_parent_id = None
-        _id = transformer_functions.get_parent_id(proj_id =self.event['object_attributes']["project_id"],iid = self.event['object_attributes']["iid"],instance =self.instance_object)
+        _id = transformer_functions.get_parent_id(proj_id=self.event['object_attributes']["project_id"],
+                                                  iid=self.event['object_attributes']["iid"],
+                                                  instance=self.instance_object)
         if _id["epic"] is not None:
             parent_id = _id["epic"]["id"]
 
-        return str(parent_id),old_parent_id
+        return str(parent_id), old_parent_id
 
     def normalize_texttype_multivalue_field(self, field_value, field_attr):
+        multi_select_field_values = []
         title = []
-        multi_select_field_values = [{'field_value': title, 'act': "set"}]
-        
-        
-            
-        if len(field_value[0]) != 0:
-            
-            for value in field_value[0]:
-                
-                title.append(value['title'])     
+
+        if self.event_type == EventTypes.CREATE:
+            if len(field_value[0]) != 0:
+                for value in field_value[0]:
+                    act = 'add' if value['updated_at'] == value['created_at'] else 'remove'
+                    val = {'field_value': value['title'], 'act': act}
+                    multi_select_field_values.append(val)
+        else:
+            if len(field_value[0]) != 0:
+                for value in field_value[0]:
+                    title.append(value["title"])
                 val = {'field_value': title, 'act': "set"}
                 multi_select_field_values.append(val)
-            return multi_select_field_values
-        else:
-            return multi_select_field_values
+            else:
+                for val in self.event["changes"]["labels"]["previous"]:
+                    val = {'field_value': val["title"], 'act': "remove"}
+                    multi_select_field_values.append(val)
+
+        return multi_select_field_values
 
     def migrate_create(self):
-        res = transformer_functions.get_issue(self.instance_object,self.project_info,self.workitem_display_id)
+        res = transformer_functions.get_issue(self.instance_object, self.project_info, self.workitem_display_id)
         event = {
 
             "object_attributes": res,
@@ -151,15 +151,13 @@ class Inbound(BaseInbound):
         return [event]
 
 
-
-
 class Outbound(BaseOutbound):
 
     def connect(self):
         try:
             return transformer_functions.connect(
-                                                self.instance_details
-                                                )
+                self.instance_details
+            )
         except Exception as e:
             error_msg = 'Connection to Demo plugin failed.  Error is [{}].'.format(str(e))
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
@@ -170,7 +168,7 @@ class Outbound(BaseOutbound):
             multivalues = []
             for outbound_field in transfome_field_objs:
                 if outbound_field.is_multivalue:
-                     for values in outbound_field.value:
+                    for values in outbound_field.value:
                         multivalues.append(values["field_value"])
                         create_fields[outbound_field.name.lower()] = multivalues
                 else:
@@ -202,22 +200,22 @@ class Outbound(BaseOutbound):
                 create_fields["epic_id"] = parent_val[0]
             return create_fields
 
-
     def create(self, sync_fields):
-        
-        
-        try: 
+
+        try:
             ticket = transformer_functions.tickets(self.instance_object
-                                         ,payload =sync_fields,id =self.project_info["project"],name = self.project_info["display_name"],parentid=self.transform_parent_id())
+                                                   , payload=sync_fields, id=self.project_info["project"],
+                                                   name=self.project_info["display_name"],
+                                                   parentid=self.transform_parent_id())
             orgsplit = self.project_info["project"].split('/')
-            org = orgsplit[0]            
+            org = orgsplit[0]
             sync_info = {
-                "project":  self.project_info["project"],
+                "project": self.project_info["project"],
                 "issuetype": "issues",
                 "synced_fields": sync_fields
-            } 
+            }
             xref_object = {
-                "relative_url": "{}/{}/{}/{}".format("repos",org,self.project_info["display_name"],"issues"),
+                "relative_url": "{}/{}/{}/{}".format("repos", org, self.project_info["display_name"], "issues"),
                 'id': str(ticket['id']),
                 'display_id': str(ticket['iid']),
                 'sync_info': sync_info,
@@ -233,7 +231,9 @@ class Outbound(BaseOutbound):
         try:
 
             transformer_functions.update_tickets(self.instance_object
-                                         ,payload=sync_fields,id =self.project_info["project"],name = self.project_info["display_name"],parentid=self.transform_parent_id(),workid = self.workitem_display_id )
+                                                 , payload=sync_fields, id=self.project_info["project"],
+                                                 name=self.project_info["display_name"],
+                                                 parentid=self.transform_parent_id(), workid=self.workitem_display_id)
         except Exception as e:
             error_msg = ('Unable to sync fields in Gitlab. Error is [{}]. Trying to sync fields \n'
                          '[{} {}]\n.'.format(e, " ", sync_fields))
@@ -242,11 +242,10 @@ class Outbound(BaseOutbound):
     def comment_create(self, comment):
         try:
             payload = {
-                "body": comment            
+                "body": comment
             }
 
-            ##transformer_functions.tickets(self.instance_object,
-                                         ## id=self.workitem_id, payload=payload)
+
         except Exception as e:
             error_msg = 'Unable to sync comment. Error is [{}]. The comment is [{}]'.format(str(e), comment)
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)

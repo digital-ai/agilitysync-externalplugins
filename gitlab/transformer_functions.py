@@ -119,11 +119,13 @@ BOOLEAN_VALUES = [
 
 def ticfields():
     return fields
-def get_issue(instance,proj_id,workid):
 
-    path = "{}/{}/{}/{}".format("projects",proj_id["project"],"issues",workid)
+
+def get_issue(instance, proj_id, workid):
+    path = "{}/{}/{}/{}".format("projects", proj_id["project"], "issues", workid)
 
     return instance.get(path)
+
 
 def epicfields():
     return fields_epic
@@ -231,7 +233,7 @@ def update_tickets(instance, payload, id, name, parentid=None, workid=None):
             path = "{}/{}/{}/{}".format(
                 "groups",
                 orgsplit[0],
-                "epics",workid
+                "epics", workid
             )
             res = instance.put(path, payload)
 
@@ -261,7 +263,7 @@ def update_tickets(instance, payload, id, name, parentid=None, workid=None):
             path = "{}/{}/{}/{}".format(
                 "groups",
                 orgsplit[0],
-                "epics",workid
+                "epics", workid
             )
 
 
@@ -321,17 +323,19 @@ def webhooks(instance, id, payload=None):
 def get_fields_values(instance, field):
     path = "{}/{}"
 
-def get_org_id(instance,id):
-    path ="{}/{}".format("projects",id)
+
+def get_org_id(instance, id):
+    path = "{}/{}".format("projects", id)
 
     response = instance.get(path)
     return response["namespace"]["id"]
-def get_parent_id(proj_id,iid,instance):
 
-    path = "{}/{}/{}/{}".format("projects",proj_id,"issues",iid)
+
+def get_parent_id(proj_id, iid, instance):
+    path = "{}/{}/{}/{}".format("projects", proj_id, "issues", iid)
 
     try:
         response = instance.get(path)
-        return  response
+        return response
     except:
-        return  response["error"]
+        return response["error"]
