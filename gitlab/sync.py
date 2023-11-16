@@ -36,7 +36,15 @@ class Payload(BasePayload):
 class Event(BaseEvent):
 
     def fetch_event_type(self):
-        event_type = self.event['object_attributes']['action']
+        if self.event['object_attributes']["updated_at"] == self.event['object_attributes']["created_at"]:
+            event_type = "open"
+        elif self.event['object_attributes']["updated_at"] != self.event['object_attributes']["created_at"]:
+            event_type = "update"
+        else:
+            event_type = self.event['object_attributes']["action"]
+        
+        
+        
 
         if event_type in ('open'):
             return EventTypes.CREATE
@@ -49,7 +57,7 @@ class Event(BaseEvent):
         raise as_exceptions.PayloadError(error_msg)
 
     def fetch_workitem_id(self):
-        return self.event['object_attributes']['id']
+        return str(self.event['object_attributes']['id'])
 
     def fetch_workitem_display_id(self):
         return self.event['object_attributes']['iid']
@@ -123,9 +131,10 @@ class Inbound(BaseInbound):
                 val = {'field_value': title, 'act': "set"}
                 multi_select_field_values.append(val)
             else:
-                for val in self.event["changes"]["labels"]["previous"]:
-                    val = {'field_value': val["title"], 'act': "remove"}
-                    multi_select_field_values.append(val)
+                
+                        val = {'field_value': [], 'act': "remove"}
+                        multi_select_field_values.append(val)
+                    
 
         return multi_select_field_values
 
@@ -134,6 +143,7 @@ class Inbound(BaseInbound):
         event = {
 
             "object_attributes": res,
+            
         }
         labels = []
         if len(res["labels"]) != 0:
@@ -145,6 +155,8 @@ class Inbound(BaseInbound):
                 labels.append(label)
 
         event["object_attributes"]["action"] = "open"
+        event["object_attributes"]["created_at"] = res["created_at"]
+        event["object_attributes"]["updated_at"] = res["created_at"]
         event["object_attributes"]["labels"] = labels
         event["object_attributes"]["url"] = res["web_url"]
 
@@ -182,15 +194,18 @@ class Outbound(BaseOutbound):
             return create_fields
         else:
             create_fields = {}
-            multivalues = []
+            multivalues_add = []
+            multivalues_rem = []
             for outbound_field in transfome_field_objs:
                 if outbound_field.is_multivalue:
                     for values in outbound_field.value:
-                        multivalues.append(values["field_value"])
+                       
                         if values["act"] == "add":
-                            create_fields["add_labels"] = multivalues
+                            multivalues_add.append(values["field_value"])
+                            create_fields["add_labels"] = multivalues_add
                         if values["act"] == "remove":
-                            create_fields["remove_labels"] = multivalues
+                            multivalues_rem.append(values["field_value"])
+                            create_fields["remove_labels"] = multivalues_rem
                 else:
                     field_name = outbound_field.name
                     field_value = outbound_field.value
