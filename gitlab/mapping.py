@@ -14,8 +14,8 @@ import external_plugins.gitlab.default as DEFAULT
 
 from agilitysync.external_lib.restapi import ASyncRestApi
 
+
 class Field(BaseField):
-    
 
     def is_required_field(self):
         if self.field_attr["required"] is True:
@@ -43,7 +43,7 @@ class Field(BaseField):
             return True
         else:
             return False
-        
+
     def _field_type_info(self, field_type, display_image, values=None, value_type=None):
         field_type_doc = {"type": field_type}
 
@@ -55,13 +55,13 @@ class Field(BaseField):
             field_type_doc["display_icon"] = display_image
 
         return field_type_doc
-    def get_field_value(self,field_type,id,asset):
+
+    def get_field_value(self, field_type, id, asset):
         if field_type == "color":
-            colors = ["Red","Blue","Green","Orange","Purple"]
+            colors = ["Red", "Blue", "Green", "Orange", "Purple"]
             return colors
         else:
-            list = transformer_functions.get_fields_values(self.instance_obj,field_type)
-
+            list = transformer_functions.get_fields_values(self.instance_obj, field_type)
 
     def fetch_fieldtype_info(self):
         fields_type = {
@@ -77,13 +77,13 @@ class Field(BaseField):
             "TAGGER": "tagger",
             "LOOKUP": "lookup",
             "RELATION": "Relation",
-            "BOOLEAN":"Boolean"
+            "BOOLEAN": "Boolean"
         }
         fields = {
             "title": {
                 "type": fields_type["TEXT"],
                 "system": "title"
-            }, 
+            },
             "labels": {
                 "type": fields_type["TEXT"],
                 "system": "labels"
@@ -112,12 +112,12 @@ class Field(BaseField):
                 "type": fields_type["DATE"],
                 "system": "due_date_fixed"
             }
-            
+
         }
         attribute_type = fields[self.field_attr['type']]['type'].capitalize()
 
         if attribute_type == 'Text':
-            return self._field_type_info(FieldTypes.TEXT,  FieldDisplayIcon.TEXT)
+            return self._field_type_info(FieldTypes.TEXT, FieldDisplayIcon.TEXT)
         if attribute_type == 'Integer':
             return self._field_type_info(FieldTypes.NUMERIC, FieldDisplayIcon.NUMERIC)
         if attribute_type == 'Date':
@@ -126,10 +126,13 @@ class Field(BaseField):
             return self._field_type_info(FieldTypes.BOOLEAN_LIST, FieldDisplayIcon.BOOLEAN,
                                          transformer_functions.BOOLEAN_VALUES, FieldTypes.BOOLEAN)
         elif attribute_type == 'Relation':
-            list = transformer_functions.get_field_value(self.instance_obj,details=self.instance_details,repo=self.fields_obj.project_info['display_name'],org = self.fields_obj.query_params["organization"]['display_name'] )
+            list = transformer_functions.get_field_value(self.instance_obj, details=self.instance_details,
+                                                         repo=self.fields_obj.project_info['display_name'],
+                                                         org=self.fields_obj.query_params["organization"][
+                                                             'display_name'])
             value_list = []
             for values in list:
-                 value_list.append({"id": values["id"], "value": values["title"], "display_value": values["title"]})
+                value_list.append({"id": values["id"], "value": values["title"], "display_value": values["title"]})
             return self._field_type_info(
                 FieldTypes.LIST,
                 FieldDisplayIcon.DROPDOWN,
@@ -137,10 +140,11 @@ class Field(BaseField):
                 FieldTypes.TEXT
             )
 
+
 class Fields(BaseFields):
 
     def fetch_fields(self):
-        
+
         if self.asset_info["display_name"] == "epic":
             fields = transformer_functions.epicfields()
 
@@ -150,86 +154,87 @@ class Fields(BaseFields):
 
 
 class AssetsManage(BaseAssetsManage):
-    
+
     def fetch_org(self):
-        response_orgs= transformer_functions.get_org(self.instance_obj)
+        response_orgs = transformer_functions.get_org(self.instance_obj)
         orgs = []
         for org in response_orgs:
             orgs.append(
-                    {
-                        'id': org['id'],
-                        "organization": org["name"],
-                        'display_name': org['name'],
-                        
-                    }
-                )
+                {
+                    'id': org['id'],
+                    "organization": org["name"],
+                    'display_name': org['name'],
+
+                }
+            )
         return orgs
-    
+
     def connect(self):
         return transformer_functions.connect(
             self.instance_details
         )
-    
+
     def fetch_sync_user(self):
         user = self.instance_details["Username"]
         return user
-    
+
     def fetch_projects(self):
         org = self.query_params["organization"]["id"]
-        response_repos = transformer_functions.get_repos(self.instance_obj , org)
-        projects = [ ]
+        response_repos = transformer_functions.get_repos(self.instance_obj, org)
+        projects = []
         for project in response_repos:
             projects.append(
                 {
                     'id': str(project['name']),
                     "project": str(project["id"]),
                     'display_name': project['name'],
-                    
+
                 }
             )
-        projects.append({'id': "no_project","project":str(self.query_params["organization"]["id"]) + "/" + "No Project","display_name":"No Project"})
+        projects.append(
+            {'id': "no_project", "project": str(self.query_params["organization"]["id"]) + "/" + "No Project",
+             "display_name": "No Project"})
         return projects
-    
+
     def fetch_assets(self):
-        
+
         asset_types = []
         proj = self.query_params["projects"][0]
-        if  proj["id"] == "no_project":
+        if proj["id"] == "no_project":
             asset_types.append(
-                        {
-                            "id": "Assettype-002",
-                            "asset": "Assettype-002",
-                            "display_name": "epic",
-                        })
+                {
+                    "id": "Assettype-002",
+                    "asset": "Assettype-002",
+                    "display_name": "epic",
+                })
         else:
             for field in transformer_functions.ticket_fields(self.instance_obj):
-            
-                    asset_types.append(
-                        {
-                            "id": field["id"],
-                            "asset": field["id"],
-                            "display_name": field["display_name"],
-                        })
+                asset_types.append(
+                    {
+                        "id": field["id"],
+                        "asset": field["id"],
+                        "display_name": field["display_name"],
+                    })
         return asset_types
-    
+
     def test_connection(self):
         try:
-            return transformer_functions.check_connection(self.instance_obj,self.instance_details)
+            return transformer_functions.check_connection(self.instance_obj, self.instance_details)
         except Exception as ex:
-            raise as_exceptions.SanitizedPluginError("Unknown error connecting to GItlab Plugin integration system.", str(ex))
+            raise as_exceptions.SanitizedPluginError("Unknown error connecting to GItlab Plugin integration system.",
+                                                     str(ex))
+
 
 class WebHook(BaseWebHook):
-    
-    def create_webhook(self, webhook_name, webhook_url,webhook_description,project_id):
-        
+
+    def create_webhook(self, webhook_name, webhook_url, webhook_description, project_id):
         payload = {
-            
-                        "url" : webhook_url,
-                        "issues_events" : True
 
-                }  # Payload data to create single webhook
-       
+            "url": webhook_url,
+            "issues_events": True
+
+        }  # Payload data to create single webhook
+
         for project in self.projects_info:
-            transformer_functions.webhooks(self.instance_obj,id = project['project']
-                                                      ,payload=payload)  
-
+            transformer_functions.webhooks(self.instance_obj, id=project['project']
+                                           , payload=payload)
