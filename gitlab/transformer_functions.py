@@ -40,6 +40,42 @@ fields = [
         "type": "weight",
         "IsMultivalue": False
     },
+    {
+        "required": False,
+        "disabled field": False,
+        "customfield": False,
+        "raw_title": "due_date",
+        "title": "due_date",
+        "type": "due_date",
+        "IsMultivalue": False
+    },
+    {
+        "required": False,
+        "disabled field": False,
+        "customfield": False,
+        "raw_title": "health_status",
+        "title": "health_status",
+        "type": "health_status",
+        "IsMultivalue": False
+    },
+    {
+        "required": False,
+        "disabled field": False,
+        "customfield": False,
+        "raw_title": "milestone_id",
+        "title": "milestones",
+        "type": "milestones",
+        "IsMultivalue": False
+    },
+    {
+        "required": False,
+        "disabled field": False,
+        "customfield": False,
+        "raw_title": "assignee_ids",
+        "title": "assignee",
+        "type": "assignee",
+        "IsMultivalue": True
+    },
 
 ]
 fields_epic = [
@@ -107,6 +143,15 @@ fields_epic = [
         "title": "due_date_fixed",
         "type": "due_date_fixed",
         "IsMultivalue": False
+    },
+    {
+        "required": False,
+        "disabled field": False,
+        "customfield": False,
+        "raw_title": "assignee",
+        "title": "assignee",
+        "type": "assignee",
+        "IsMultivalue": True
     },
 
 ]
@@ -339,3 +384,90 @@ def get_parent_id(proj_id, iid, instance):
         return response
     except:
         return response["error"]
+
+
+def multivalue_fetch(instance, proj_id, field):
+    path_grp_id = "{}/{}".format("projects", proj_id)
+    grp_id = instance.get(path_grp_id)
+    if field == "health_status":
+        list = [{"id": 1, "title": "on_track"}, {"id": 2, "title": "needs_attention"}, {"id": 3, "title": "at_risk"}]
+        return list
+
+    if field == "milestones":
+        list_value = []
+        grp_path = "{}/{}/{}".format("projects", proj_id, "milestones")
+        proj_path = "{}/{}/{}".format("groups", grp_id["namespace"]["id"], "milestones")
+
+        response_grp = instance.get(grp_path)
+        response_proj = instance.get(proj_path)
+        for val in response_grp:
+            response_proj.append(val)
+        for val in response_proj:
+            list_value.append(
+                {
+                    "id": val["id"],
+                    "title": val["title"],
+                    "display_value": val["title"]
+                })
+        return list_value
+
+
+def user_details(instance, proj_id):
+
+    grp_path = "{}/{}".format("projects", proj_id["project"])
+    grp_id = instance.get(grp_path)
+    user_info_path = "{}/{}/{}".format("groups", grp_id["namespace"]["id"], "members")
+    res = instance.get(user_info_path)
+    return  res
+
+
+def get_milestone_name(instance, proj_id, milestone_val):
+    path_grp_id = "{}/{}".format("projects", proj_id["project"])
+    grp_id = instance.get(path_grp_id)
+    grp_path = "{}/{}/{}".format("projects", proj_id["project"], "milestones")
+    proj_path = "{}/{}/{}".format("groups", grp_id["namespace"]["id"], "milestones")
+
+    response_grp = instance.get(grp_path)
+    response_proj = instance.get(proj_path)
+    for val in response_grp:
+        response_proj.append(val)
+    for vals in response_proj:
+        if milestone_val == vals["title"] or milestone_val == vals["id"]:
+            return vals["title"]
+        else:
+            return None
+
+def get_milestone_id(instance,proj_id,milestone_name):
+
+    path_grp_id = "{}/{}".format("projects", proj_id["project"])
+    grp_id = instance.get(path_grp_id)
+    grp_path = "{}/{}/{}".format("projects", proj_id["project"], "milestones")
+    proj_path = "{}/{}/{}".format("groups", grp_id["namespace"]["id"], "milestones")
+
+    response_grp = instance.get(grp_path)
+    response_proj = instance.get(proj_path)
+    for val in response_grp:
+        response_proj.append(val)
+    for vals in response_proj:
+        if milestone_name == vals["title"] or milestone_name == vals["id"]:
+            return vals["id"]
+    return None
+def get_assignee(instance, proj_id,work_id):
+    path = "{}/{}/{}/{}".format(
+            "projects",
+            proj_id["project"],
+            "issues", work_id
+        )
+
+
+    response = instance.get(path)
+    vals = []
+    if response:
+        for val in response["assignees"]:
+            vals.append(val["id"])
+
+
+    return vals
+
+
+

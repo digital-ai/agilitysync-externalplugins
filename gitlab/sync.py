@@ -9,7 +9,8 @@ from agilitysync.sync import (
     BaseAttachmentUpload,
     FieldTypes,
     EventTypes,
-    EventCategory
+    EventCategory,
+    as_log
 )
 import re
 from datetime import datetime
@@ -17,6 +18,7 @@ from dateutil import parser
 import time
 import json
 from external_plugins.gitlab import transformer_functions
+from requests.exceptions import HTTPError
 
 
 class Payload(BasePayload):
@@ -42,9 +44,6 @@ class Event(BaseEvent):
             event_type = "update"
         else:
             event_type = self.event['object_attributes']["action"]
-        
-        
-        
 
         if event_type in ('open'):
             return EventTypes.CREATE
@@ -100,7 +99,6 @@ class Inbound(BaseInbound):
         if event_type in ('open', 'close', 'update'):
             category.append(EventCategory.WORKITEM)
 
-
         return category
 
     def fetch_parent_id(self):
@@ -131,10 +129,9 @@ class Inbound(BaseInbound):
                 val = {'field_value': title, 'act': "set"}
                 multi_select_field_values.append(val)
             else:
-                
-                        val = {'field_value': [], 'act': "remove"}
-                        multi_select_field_values.append(val)
-                    
+
+                val = {'field_value': [], 'act': "remove"}
+                multi_select_field_values.append(val)
 
         return multi_select_field_values
 
@@ -143,7 +140,7 @@ class Inbound(BaseInbound):
         event = {
 
             "object_attributes": res,
-            
+
         }
         labels = []
         if len(res["labels"]) != 0:
@@ -162,6 +159,32 @@ class Inbound(BaseInbound):
 
         return [event]
 
+    def normalize_usertype_multivalue_field(self, field_value, field_attr):
+        user_info = []
+        users = []
+
+        for val in field_value:
+            info = transformer_functions.user_details(self.instance_object, self.project_info)
+            if info and val:
+                for vals in info:
+                    if val[0] == vals["id"]:
+                        users.append({"username": vals["name"]})
+
+                user_info.append({'field_value': users, 'act': "set"})
+
+            else:
+
+                raise as_exceptions.SkipFieldToNormalize(
+                    "Ignoring field as the username and the email address are not available.")
+        return user_info
+
+    def normalize_listtype_fieldvalue(self, field_value, field_attr):
+        if field_attr['name'] == 'milestone_id':
+            name = transformer_functions.get_milestone_name(self.instance_object, self.project_info, field_value)
+            return name
+
+        return field_value
+
 
 class Outbound(BaseOutbound):
 
@@ -175,17 +198,33 @@ class Outbound(BaseOutbound):
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
 
     def transform_fields(self, transfome_field_objs):
+
         if self.inbound.event_type == EventTypes.CREATE:
             create_fields = {}
             multivalues = []
+            multivalues_add = []
             for outbound_field in transfome_field_objs:
                 if outbound_field.is_multivalue:
-                    for values in outbound_field.value:
-                        multivalues.append(values["field_value"])
-                        create_fields[outbound_field.name.lower()] = multivalues
+                    if outbound_field.value:
+                        if outbound_field.name == "assignee_ids":
+                            for vals in outbound_field.value:
+                                multivalues_add.append(vals)
+                            create_fields["assignee_ids"] = multivalues_add
+                            multivalues_add.clear()
+                        else:
+                            for values in outbound_field.value:
+                                multivalues.append(values["field_value"])
+                                create_fields[outbound_field.name.lower()] = multivalues
                 else:
-                    field_name = outbound_field.name
-                    field_value = outbound_field.value
+
+                    if outbound_field.name == "milestone_id":
+                        title = transformer_functions.get_milestone_id(self.instance_details, self.project_info,
+                                                                       outbound_field.value)
+                        field_name = outbound_field.name
+                        field_value = title
+                    else:
+                        field_name = outbound_field.name
+                        field_value = outbound_field.value
                     create_fields[field_name.lower()] = field_value
             parent_val = self.transform_parent_id()
             if parent_val[0] is not None:
@@ -193,27 +232,66 @@ class Outbound(BaseOutbound):
 
             return create_fields
         else:
-            create_fields = {}
+            create_fields = {"issue_type":"issue"}
             multivalues_add = []
             multivalues_rem = []
             for outbound_field in transfome_field_objs:
                 if outbound_field.is_multivalue:
-                    for values in outbound_field.value:
-                       
-                        if values["act"] == "add":
-                            multivalues_add.append(values["field_value"])
-                            create_fields["add_labels"] = multivalues_add
-                        if values["act"] == "remove":
-                            multivalues_rem.append(values["field_value"])
-                            create_fields["remove_labels"] = multivalues_rem
+                    if outbound_field.value:
+                        for values in outbound_field.value:
+                            if outbound_field.name == "assignee_ids":
+                                assigeens = transformer_functions.get_assignee(self.instance_object, self.project_info,
+                                                                               self.workitem_display_id)
+                                if values["act"] == "add" and values["id"] not in assigeens:
+                                    assigeens.append(values["id"])
+                                if values["act"] == "remove":
+                                    assigeens.remove(values["id"])
+                                create_fields["assignee_ids"] = assigeens
+                            else:
+                                if values["act"] == "add":
+                                    multivalues_add.append(values["field_value"])
+                                    create_fields["add_labels"] = multivalues_add
+                                if values["act"] == "remove":
+                                    multivalues_rem.append(values["field_value"])
+                                    create_fields["remove_labels"] = multivalues_rem
                 else:
-                    field_name = outbound_field.name
-                    field_value = outbound_field.value
+                    if outbound_field.name == "milestone_id":
+                        title = transformer_functions.get_milestone_id(self.instance_object, self.project_info,
+                                                                       outbound_field.value)
+                        field_name = outbound_field.name
+                        field_value = title
+                    else:
+                        field_name = outbound_field.name
+                        field_value = outbound_field.value
                     create_fields[field_name.lower()] = field_value
             parent_val = self.transform_parent_id()
             if parent_val[0] is not None:
                 create_fields["epic_id"] = parent_val[0]
             return create_fields
+
+    def transform_usertype_multivalue(self, value, field_obj):
+        # To reset multi select user field
+        user = value
+        user_id = []
+        try:
+            for no in range(len(user)):
+                if 'username' in user[no]["field_value"]:
+                    info = transformer_functions.user_details(self.instance_object, self.project_info)
+                    if info:
+                        for vals in info:
+                            if user[no]["field_value"]["username"] == vals["username"] or user[no]["field_value"][
+                                "username"] == vals["name"]:
+                                user_id.append({"act": user[no]["act"], "id": vals["id"]})
+
+                if not user_id:
+                    err_msg = "Unable to transform user [{}] as user does not exist.".format(user)
+                    raise as_exceptions.SkipFieldToSync(err_msg)
+        except HTTPError as e:
+            as_log.error('gitlab/OutboundTransformer - Get user info failed.  Error is [{}].'.format(str(e)))
+        except Exception as e:
+            as_log.error('gitlab/OutboundTransformer - Get user info failed.  Error is [%s].' % (str(e)))
+        finally:
+            return user_id
 
     def create(self, sync_fields):
 
