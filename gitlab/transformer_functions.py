@@ -434,8 +434,8 @@ def get_milestone_name(instance, proj_id, milestone_val):
     for vals in response_proj:
         if milestone_val == vals["title"] or milestone_val == vals["id"]:
             return vals["title"]
-        else:
-            return None
+
+    return None
 
 def get_milestone_id(instance,proj_id,milestone_name):
 
@@ -469,5 +469,9 @@ def get_assignee(instance, proj_id,work_id):
 
     return vals
 
+def comment(instance,proj_id,payload,workid):
 
+    path ="{}/{}/{}/{}/{}".format("projects",proj_id["project"],"issues",workid,"notes")
+
+    return instance.post(path,payload)
 

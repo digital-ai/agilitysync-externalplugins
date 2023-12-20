@@ -1,4 +1,4 @@
-from typing import Tuple, Union, List, Dict
+from typing import Tuple, Union, List, Dict, Optional
 
 from agilitysync.sync import (
     as_exceptions,
@@ -7,6 +7,7 @@ from agilitysync.sync import (
     BasePayload,
     BaseEvent,
     BaseAttachmentUpload,
+    BaseAttachmentDownload,
     FieldTypes,
     EventTypes,
     EventCategory,
@@ -20,6 +21,49 @@ import json
 from external_plugins.gitlab import transformer_functions
 from requests.exceptions import HTTPError
 
+class AttachmentUpload(BaseAttachmentUpload):
+
+    def fetch_url(self):
+
+        return "{}/{}".format("'https://gitlab.com",self.private_data["url"])
+
+    def fetch_upload_url(self):
+
+        return "{}/{}/{}/{}".format(self.instance_details["url"],"projects",self.outbound.project_info["project"],"uploads")
+    def fetch_multipart_data(self, storage_obj):
+        payload = {
+            "file" : storage_obj
+        }
+        return payload
+
+    def fetch_id(self):
+        return self.outbound.workitem_display_id
+
+    def fetch_header_info(self):
+        return {"Authorization": "Bearer {}".format(self.instance_details["token"])}
+
+    def upload_on_success(self,response):
+        res = []
+        res.append(eval(response.text))
+        self.private_data = eval(response.text)
+        try:
+            payload = {
+                "body": "![{}]({})".format(self.filename,res[0]["url"])
+            }
+            transformer_functions.comment(self.instance_object, self.outbound.project_info, payload, self.outbound.workitem_display_id)
+
+
+        except Exception as e:
+            error_msg = 'Unable to sync comment. Error is [{}]. The comment is [{}]'.format(str(e), comment)
+            raise as_exceptions.OutboundError(error_msg, stack_trace=True)
+
+    def remove(self, attachment_id, verify_tls):
+        self.instance_object.post("{}/{}".format(transformer_functions.ATTACHMENT_CREATE_ENDPOINT,
+                                                 attachment_id.split(":")[1]),
+                                  {'id': attachment_id}, query_str="op=Delete")
+class AttachmentDownload(BaseAttachmentDownload):
+    def basic_auth(self):
+        return {"rohithamroser","Pwe_96fww3:PF6h"}
 
 class Payload(BasePayload):
 
@@ -38,9 +82,10 @@ class Payload(BasePayload):
 class Event(BaseEvent):
 
     def fetch_event_type(self):
+
         if self.event['object_attributes']["updated_at"] == self.event['object_attributes']["created_at"]:
             event_type = "open"
-        elif self.event['object_attributes']["updated_at"] != self.event['object_attributes']["created_at"]:
+        if self.event['object_attributes']["updated_at"] != self.event['object_attributes']["created_at"] or self.event["event_type"] == "note" :
             event_type = "update"
         else:
             event_type = self.event['object_attributes']["action"]
@@ -56,10 +101,16 @@ class Event(BaseEvent):
         raise as_exceptions.PayloadError(error_msg)
 
     def fetch_workitem_id(self):
-        return str(self.event['object_attributes']['id'])
+        if self.event["event_type"] == "issue":
+            return str(self.event['object_attributes']['id'])
+        else:
+            return str(self.event['issue']['id'])
 
     def fetch_workitem_display_id(self):
-        return self.event['object_attributes']['iid']
+        if self.event['object_attributes'].get("iid") is not None:
+            return self.event['object_attributes']['iid']
+        else:
+            return self.event['object_attributes']['id']
 
     def fetch_workitem_url(self):
         return "/".join(self.event['object_attributes']['url'].split("/")[1:])
@@ -94,10 +145,14 @@ class Inbound(BaseInbound):
     def fetch_event_category(self):
         category = []
 
-        event_type = self.event['object_attributes']["action"]
+        if self.event['object_attributes'].get("action") is not None:
 
-        if event_type in ('open', 'close', 'update'):
             category.append(EventCategory.WORKITEM)
+        elif self.event['object_attributes']["note"].find("/upload/"):
+            category.append(EventCategory.ATTACHMENT)
+        else:
+            category.append(EventCategory.COMMENT)
+
 
         return category
 
@@ -115,7 +170,9 @@ class Inbound(BaseInbound):
     def normalize_texttype_multivalue_field(self, field_value, field_attr):
         multi_select_field_values = []
         title = []
-
+        if len(field_value) == 0:
+            raise as_exceptions.SkipFieldToNormalize(
+                "Ignoring field because labels are not available.")
         if self.event_type == EventTypes.CREATE:
             if len(field_value[0]) != 0:
                 for value in field_value[0]:
@@ -128,10 +185,7 @@ class Inbound(BaseInbound):
                     title.append(value["title"])
                 val = {'field_value': title, 'act': "set"}
                 multi_select_field_values.append(val)
-            else:
 
-                val = {'field_value': [], 'act': "remove"}
-                multi_select_field_values.append(val)
 
         return multi_select_field_values
 
@@ -152,6 +206,7 @@ class Inbound(BaseInbound):
                 labels.append(label)
 
         event["object_attributes"]["action"] = "open"
+        event["event_type"] = "issue"
         event["object_attributes"]["created_at"] = res["created_at"]
         event["object_attributes"]["updated_at"] = res["created_at"]
         event["object_attributes"]["labels"] = labels
@@ -162,7 +217,9 @@ class Inbound(BaseInbound):
     def normalize_usertype_multivalue_field(self, field_value, field_attr):
         user_info = []
         users = []
-
+        if len(field_value) == 0:
+            raise as_exceptions.SkipFieldToNormalize(
+                "Ignoring field as the username and the email address are not available.")
         for val in field_value:
             info = transformer_functions.user_details(self.instance_object, self.project_info)
             if info and val:
@@ -184,6 +241,39 @@ class Inbound(BaseInbound):
             return name
 
         return field_value
+
+    def fetch_comment(self):
+        return self.event['object_attributes']["note"]
+
+    def fetch_attachments_metadata(self):
+        attachment_doc = {
+            "id": self.event['object_attributes']['id'],
+            "headers": {
+                "Authorization": "Bearer {}".format(self.instance_details["token"])
+            },
+            "url" : re.search("(?P<url>https?://[^\s]+)", self.event["object_attributes"]["description"]).group("url").split(")")[0],
+            "content_type" : re.search("(?P<url>https?://[^\s]+)", self.event["object_attributes"]["description"]).group("url") .split(".")[-1].split(")")[0],
+            "type" : "ADDED"
+        }
+        substrings = []
+        in_brackets = False
+        current_substring = ""
+
+        for c in self.event["object_attributes"]["note"]:
+            if c == "[":
+                in_brackets = True
+            elif c == "]" and in_brackets:
+                substrings.append(current_substring)
+                current_substring = ""
+                in_brackets = False
+            elif in_brackets:
+                current_substring += c
+
+        if current_substring:
+            substrings.append(current_substring)
+        attachment_doc["filename"] = substrings[0]
+        return [attachment_doc]
+
 
 
 class Outbound(BaseOutbound):
@@ -208,9 +298,9 @@ class Outbound(BaseOutbound):
                     if outbound_field.value:
                         if outbound_field.name == "assignee_ids":
                             for vals in outbound_field.value:
-                                multivalues_add.append(vals)
+                                multivalues_add.append(vals['id'])
                             create_fields["assignee_ids"] = multivalues_add
-                            multivalues_add.clear()
+
                         else:
                             for values in outbound_field.value:
                                 multivalues.append(values["field_value"])
@@ -218,7 +308,7 @@ class Outbound(BaseOutbound):
                 else:
 
                     if outbound_field.name == "milestone_id":
-                        title = transformer_functions.get_milestone_id(self.instance_details, self.project_info,
+                        title = transformer_functions.get_milestone_id(self.instance_object, self.project_info,
                                                                        outbound_field.value)
                         field_name = outbound_field.name
                         field_value = title
@@ -244,8 +334,9 @@ class Outbound(BaseOutbound):
                                                                                self.workitem_display_id)
                                 if values["act"] == "add" and values["id"] not in assigeens:
                                     assigeens.append(values["id"])
-                                if values["act"] == "remove":
-                                    assigeens.remove(values["id"])
+                                if assigeens:
+                                    if values["act"] == "remove":
+                                        assigeens.remove(values["id"])
                                 create_fields["assignee_ids"] = assigeens
                             else:
                                 if values["act"] == "add":
@@ -337,6 +428,7 @@ class Outbound(BaseOutbound):
             payload = {
                 "body": comment
             }
+            transformer_functions.comment(self.instance_object,self.project_info,payload,self.workitem_display_id)
 
 
         except Exception as e:
