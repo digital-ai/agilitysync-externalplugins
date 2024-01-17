@@ -252,7 +252,8 @@ class WebHook(BaseWebHook):
         payload = {
 
             "url": webhook_url,
-            "issues_events": True
+            "issues_events": True,
+            "note_events" : True
 
         }  # Payload data to create single webhook
 

@@ -148,7 +148,7 @@ class Inbound(BaseInbound):
         if self.event['object_attributes'].get("action") is not None:
 
             category.append(EventCategory.WORKITEM)
-        elif self.event['object_attributes']["note"].find("/upload/"):
+        elif self.event['object_attributes']["note"].find("/upload/") is True:
             category.append(EventCategory.ATTACHMENT)
         else:
             category.append(EventCategory.COMMENT)
@@ -168,8 +168,10 @@ class Inbound(BaseInbound):
         return str(parent_id), old_parent_id
 
     def normalize_texttype_multivalue_field(self, field_value, field_attr):
-        multi_select_field_values = []
+       
         title = []
+        multi_select_field_values = [{'field_value': title, 'act': "set"}]
+        vals = []
         if len(field_value) == 0:
             raise as_exceptions.SkipFieldToNormalize(
                 "Ignoring field because labels are not available.")
@@ -178,16 +180,19 @@ class Inbound(BaseInbound):
                 for value in field_value[0]:
                     act = 'add' if value['updated_at'] == value['created_at'] else 'remove'
                     val = {'field_value': value['title'], 'act': act}
-                    multi_select_field_values.append(val)
+                    vals.append(val)
         else:
+            
             if len(field_value[0]) != 0:
                 for value in field_value[0]:
                     title.append(value["title"])
                 val = {'field_value': title, 'act': "set"}
-                multi_select_field_values.append(val)
+                vals.append(val)
+            else:
+                return multi_select_field_values
 
 
-        return multi_select_field_values
+        return vals
 
     def migrate_create(self):
         res = transformer_functions.get_issue(self.instance_object, self.project_info, self.workitem_display_id)
@@ -219,20 +224,24 @@ class Inbound(BaseInbound):
         users = []
         if len(field_value) == 0:
             raise as_exceptions.SkipFieldToNormalize(
-                "Ignoring field as the username and the email address are not available.")
-        for val in field_value:
+                    "Ignoring field as the username and the email address are not available.")
+        for val in field_value[0]:
             info = transformer_functions.user_details(self.instance_object, self.project_info)
             if info and val:
                 for vals in info:
-                    if val[0] == vals["id"]:
+                    if val == vals["id"]:
                         users.append({"username": vals["name"]})
 
-                user_info.append({'field_value': users, 'act': "set"})
+                if self.event_type == EventTypes.CREATE:
+                    for val in users:
+                        user_info.append({'field_value': val, 'act': "add"})
+                else:
+                    user_info.append({'field_value': users, 'act': "set"})
+                as_log.info("the users are {}".format(user_info))
 
             else:
-
-                raise as_exceptions.SkipFieldToNormalize(
-                    "Ignoring field as the username and the email address are not available.")
+                return []
+                
         return user_info
 
     def normalize_listtype_fieldvalue(self, field_value, field_attr):
@@ -246,33 +255,38 @@ class Inbound(BaseInbound):
         return self.event['object_attributes']["note"]
 
     def fetch_attachments_metadata(self):
-        attachment_doc = {
-            "id": self.event['object_attributes']['id'],
-            "headers": {
-                "Authorization": "Bearer {}".format(self.instance_details["token"])
-            },
-            "url" : re.search("(?P<url>https?://[^\s]+)", self.event["object_attributes"]["description"]).group("url").split(")")[0],
-            "content_type" : re.search("(?P<url>https?://[^\s]+)", self.event["object_attributes"]["description"]).group("url") .split(".")[-1].split(")")[0],
-            "type" : "ADDED"
-        }
-        substrings = []
-        in_brackets = False
-        current_substring = ""
+        
+        try:
+            attachment_doc = {
+                "id": self.event['object_attributes']['id'],
+                "headers": {
+                    "Authorization": "Bearer {}".format(self.instance_details["token"])
+                },
+                "url" : re.search("(?P<url>https?://[^\s]+)", self.event["object_attributes"]["description"]).group("url").split(")")[0],
+                "content_type" : re.search("(?P<url>https?://[^\s]+)", self.event["object_attributes"]["description"]).group("url") .split(".")[-1].split(")")[0],
+                "type" : "ADDED"
+            }
+            substrings = []
+            in_brackets = False
+            current_substring = ""
 
-        for c in self.event["object_attributes"]["note"]:
-            if c == "[":
-                in_brackets = True
-            elif c == "]" and in_brackets:
+            for c in self.event["object_attributes"]["note"]:
+                if c == "[":
+                    in_brackets = True
+                elif c == "]" and in_brackets:
+                    substrings.append(current_substring)
+                    current_substring = ""
+                    in_brackets = False
+                elif in_brackets:
+                    current_substring += c
+
+            if current_substring:
                 substrings.append(current_substring)
-                current_substring = ""
-                in_brackets = False
-            elif in_brackets:
-                current_substring += c
-
-        if current_substring:
-            substrings.append(current_substring)
-        attachment_doc["filename"] = substrings[0]
-        return [attachment_doc]
+            attachment_doc["filename"] = substrings[0]
+            return [attachment_doc]
+        except:
+            raise as_exceptions.SkipFieldToNormalize(
+                "Ignoring attachments as there is no attachment")
 
 
 
@@ -325,6 +339,7 @@ class Outbound(BaseOutbound):
             create_fields = {"issue_type":"issue"}
             multivalues_add = []
             multivalues_rem = []
+            users = []
             for outbound_field in transfome_field_objs:
                 if outbound_field.is_multivalue:
                     if outbound_field.value:
@@ -332,12 +347,17 @@ class Outbound(BaseOutbound):
                             if outbound_field.name == "assignee_ids":
                                 assigeens = transformer_functions.get_assignee(self.instance_object, self.project_info,
                                                                                self.workitem_display_id)
-                                if values["act"] == "add" and values["id"] not in assigeens:
-                                    assigeens.append(values["id"])
-                                if assigeens:
-                                    if values["act"] == "remove":
-                                        assigeens.remove(values["id"])
-                                create_fields["assignee_ids"] = assigeens
+                                
+                                for value in assigeens:
+                                    if value == values["id"] and values["act"] == "remove":
+                                        continue
+                                    
+                                    users.append(value)
+                                if values["act"] == "add" and values["id"] not in users:
+                                    users.append(values["id"])
+                                
+                                
+                                create_fields["assignee_ids"] = users
                             else:
                                 if values["act"] == "add":
                                     multivalues_add.append(values["field_value"])
@@ -371,7 +391,7 @@ class Outbound(BaseOutbound):
                     if info:
                         for vals in info:
                             if user[no]["field_value"]["username"] == vals["username"] or user[no]["field_value"][
-                                "username"] == vals["name"]:
+                                "username"] == vals["name"] :
                                 user_id.append({"act": user[no]["act"], "id": vals["id"]})
 
                 if not user_id:

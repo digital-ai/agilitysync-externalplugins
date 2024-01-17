@@ -417,7 +417,12 @@ def user_details(instance, proj_id):
     grp_path = "{}/{}".format("projects", proj_id["project"])
     grp_id = instance.get(grp_path)
     user_info_path = "{}/{}/{}".format("groups", grp_id["namespace"]["id"], "members")
+    user_proj = "{}/{}/{}".format("projects", proj_id["project"], "members")
     res = instance.get(user_info_path)
+    res_pro = instance.get(user_proj)
+    for val in res_pro:
+        res.append(val)
+
     return  res
 
 
