@@ -7,7 +7,7 @@
                     "update": "'$.object_attributes.%s' % (self.name)"
                 },
                 "blank_value": [],
-                "reset_value": [{ "set": [] }]
+                "reset_value": null
             },
             "custom": {
                 "payload_pattern": {

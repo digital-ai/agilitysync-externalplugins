@@ -77,7 +77,8 @@ class Field(BaseField):
             "TAGGER": "tagger",
             "LOOKUP": "lookup",
             "RELATION": "Relation",
-            "BOOLEAN": "Boolean"
+            "BOOLEAN": "Boolean",
+            "USER":"User"
         }
         fields = {
             "title": {
@@ -111,6 +112,23 @@ class Field(BaseField):
             "due_date_fixed": {
                 "type": fields_type["DATE"],
                 "system": "due_date_fixed"
+            },
+            "due_date":{
+                "type":fields_type["DATE"],
+                "system": "due_date"
+            },
+            "health_status":{
+                "type": fields_type["RELATION"],
+                "system": "health_status"
+            },
+            "milestones":{
+                "type": fields_type["RELATION"],
+                "system": "milestones"
+
+            },
+            "assignee":{
+                "type": fields_type["USER"],
+                "system": "assignee"
             }
 
         }
@@ -125,11 +143,14 @@ class Field(BaseField):
         if attribute_type == 'Boolean':
             return self._field_type_info(FieldTypes.BOOLEAN_LIST, FieldDisplayIcon.BOOLEAN,
                                          transformer_functions.BOOLEAN_VALUES, FieldTypes.BOOLEAN)
+        if attribute_type == "User":
+            return self._field_type_info(FieldTypes.USER, FieldDisplayIcon.USER)
         elif attribute_type == 'Relation':
-            list = transformer_functions.get_field_value(self.instance_obj, details=self.instance_details,
-                                                         repo=self.fields_obj.project_info['display_name'],
-                                                         org=self.fields_obj.query_params["organization"][
-                                                             'display_name'])
+            if self.field_attr['title'] == "health_status":
+                list = transformer_functions.multivalue_fetch(self.instance_obj,self.fields_obj.project_info['project'],"health_status")
+            else:
+                list = transformer_functions.multivalue_fetch(self.instance_obj,self.fields_obj.project_info['project'],"milestones")
+
             value_list = []
             for values in list:
                 value_list.append({"id": values["id"], "value": values["title"], "display_value": values["title"]})
@@ -231,7 +252,8 @@ class WebHook(BaseWebHook):
         payload = {
 
             "url": webhook_url,
-            "issues_events": True
+            "issues_events": True,
+            "note_events" : True
 
         }  # Payload data to create single webhook
 

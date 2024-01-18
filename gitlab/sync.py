@@ -1,4 +1,4 @@
-from typing import Tuple, Union, List, Dict
+from typing import Tuple, Union, List, Dict, Optional
 
 from agilitysync.sync import (
     as_exceptions,
@@ -7,9 +7,11 @@ from agilitysync.sync import (
     BasePayload,
     BaseEvent,
     BaseAttachmentUpload,
+    BaseAttachmentDownload,
     FieldTypes,
     EventTypes,
-    EventCategory
+    EventCategory,
+    as_log
 )
 import re
 from datetime import datetime
@@ -17,7 +19,51 @@ from dateutil import parser
 import time
 import json
 from external_plugins.gitlab import transformer_functions
+from requests.exceptions import HTTPError
 
+class AttachmentUpload(BaseAttachmentUpload):
+
+    def fetch_url(self):
+
+        return "{}/{}".format("'https://gitlab.com",self.private_data["url"])
+
+    def fetch_upload_url(self):
+
+        return "{}/{}/{}/{}".format(self.instance_details["url"],"projects",self.outbound.project_info["project"],"uploads")
+    def fetch_multipart_data(self, storage_obj):
+        payload = {
+            "file" : storage_obj
+        }
+        return payload
+
+    def fetch_id(self):
+        return self.outbound.workitem_display_id
+
+    def fetch_header_info(self):
+        return {"Authorization": "Bearer {}".format(self.instance_details["token"])}
+
+    def upload_on_success(self,response):
+        res = []
+        res.append(eval(response.text))
+        self.private_data = eval(response.text)
+        try:
+            payload = {
+                "body": "![{}]({})".format(self.filename,res[0]["url"])
+            }
+            transformer_functions.comment(self.instance_object, self.outbound.project_info, payload, self.outbound.workitem_display_id)
+
+
+        except Exception as e:
+            error_msg = 'Unable to sync comment. Error is [{}]. The comment is [{}]'.format(str(e), comment)
+            raise as_exceptions.OutboundError(error_msg, stack_trace=True)
+
+    def remove(self, attachment_id, verify_tls):
+        self.instance_object.post("{}/{}".format(transformer_functions.ATTACHMENT_CREATE_ENDPOINT,
+                                                 attachment_id.split(":")[1]),
+                                  {'id': attachment_id}, query_str="op=Delete")
+class AttachmentDownload(BaseAttachmentDownload):
+    def basic_auth(self):
+        return {"rohithamroser","Pwe_96fww3:PF6h"}
 
 class Payload(BasePayload):
 
@@ -36,15 +82,13 @@ class Payload(BasePayload):
 class Event(BaseEvent):
 
     def fetch_event_type(self):
+
         if self.event['object_attributes']["updated_at"] == self.event['object_attributes']["created_at"]:
             event_type = "open"
-        elif self.event['object_attributes']["updated_at"] != self.event['object_attributes']["created_at"]:
+        if self.event['object_attributes']["updated_at"] != self.event['object_attributes']["created_at"] or self.event["event_type"] == "note" :
             event_type = "update"
         else:
             event_type = self.event['object_attributes']["action"]
-        
-        
-        
 
         if event_type in ('open'):
             return EventTypes.CREATE
@@ -57,10 +101,16 @@ class Event(BaseEvent):
         raise as_exceptions.PayloadError(error_msg)
 
     def fetch_workitem_id(self):
-        return str(self.event['object_attributes']['id'])
+        if self.event["event_type"] == "issue":
+            return str(self.event['object_attributes']['id'])
+        else:
+            return str(self.event['issue']['id'])
 
     def fetch_workitem_display_id(self):
-        return self.event['object_attributes']['iid']
+        if self.event['object_attributes'].get("iid") is not None:
+            return self.event['object_attributes']['iid']
+        else:
+            return self.event['object_attributes']['id']
 
     def fetch_workitem_url(self):
         return "/".join(self.event['object_attributes']['url'].split("/")[1:])
@@ -95,10 +145,13 @@ class Inbound(BaseInbound):
     def fetch_event_category(self):
         category = []
 
-        event_type = self.event['object_attributes']["action"]
+        if self.event['object_attributes'].get("action") is not None:
 
-        if event_type in ('open', 'close', 'update'):
             category.append(EventCategory.WORKITEM)
+        elif self.event['object_attributes']["note"].find("/upload/") is True:
+            category.append(EventCategory.ATTACHMENT)
+        else:
+            category.append(EventCategory.COMMENT)
 
 
         return category
@@ -115,35 +168,38 @@ class Inbound(BaseInbound):
         return str(parent_id), old_parent_id
 
     def normalize_texttype_multivalue_field(self, field_value, field_attr):
-        multi_select_field_values = []
+       
         title = []
-
+        multi_select_field_values = [{'field_value': title, 'act': "set"}]
+        vals = []
+        if len(field_value) == 0:
+            raise as_exceptions.SkipFieldToNormalize(
+                "Ignoring field because labels are not available.")
         if self.event_type == EventTypes.CREATE:
             if len(field_value[0]) != 0:
                 for value in field_value[0]:
                     act = 'add' if value['updated_at'] == value['created_at'] else 'remove'
                     val = {'field_value': value['title'], 'act': act}
-                    multi_select_field_values.append(val)
+                    vals.append(val)
         else:
+            
             if len(field_value[0]) != 0:
                 for value in field_value[0]:
                     title.append(value["title"])
                 val = {'field_value': title, 'act': "set"}
-                multi_select_field_values.append(val)
+                vals.append(val)
             else:
-                
-                        val = {'field_value': [], 'act': "remove"}
-                        multi_select_field_values.append(val)
-                    
+                return multi_select_field_values
 
-        return multi_select_field_values
+
+        return vals
 
     def migrate_create(self):
         res = transformer_functions.get_issue(self.instance_object, self.project_info, self.workitem_display_id)
         event = {
 
             "object_attributes": res,
-            
+
         }
         labels = []
         if len(res["labels"]) != 0:
@@ -155,12 +211,83 @@ class Inbound(BaseInbound):
                 labels.append(label)
 
         event["object_attributes"]["action"] = "open"
+        event["event_type"] = "issue"
         event["object_attributes"]["created_at"] = res["created_at"]
         event["object_attributes"]["updated_at"] = res["created_at"]
         event["object_attributes"]["labels"] = labels
         event["object_attributes"]["url"] = res["web_url"]
 
         return [event]
+
+    def normalize_usertype_multivalue_field(self, field_value, field_attr):
+        user_info = []
+        users = []
+        if len(field_value) == 0:
+            raise as_exceptions.SkipFieldToNormalize(
+                    "Ignoring field as the username and the email address are not available.")
+        for val in field_value[0]:
+            info = transformer_functions.user_details(self.instance_object, self.project_info)
+            if info and val:
+                for vals in info:
+                    if val == vals["id"]:
+                        users.append({"username": vals["name"]})
+
+                if self.event_type == EventTypes.CREATE:
+                    for val in users:
+                        user_info.append({'field_value': val, 'act': "add"})
+                else:
+                    user_info.append({'field_value': users, 'act': "set"})
+                as_log.info("the users are {}".format(user_info))
+
+            else:
+                return []
+                
+        return user_info
+
+    def normalize_listtype_fieldvalue(self, field_value, field_attr):
+        if field_attr['name'] == 'milestone_id':
+            name = transformer_functions.get_milestone_name(self.instance_object, self.project_info, field_value)
+            return name
+
+        return field_value
+
+    def fetch_comment(self):
+        return self.event['object_attributes']["note"]
+
+    def fetch_attachments_metadata(self):
+        
+        try:
+            attachment_doc = {
+                "id": self.event['object_attributes']['id'],
+                "headers": {
+                    "Authorization": "Bearer {}".format(self.instance_details["token"])
+                },
+                "url" : re.search("(?P<url>https?://[^\s]+)", self.event["object_attributes"]["description"]).group("url").split(")")[0],
+                "content_type" : re.search("(?P<url>https?://[^\s]+)", self.event["object_attributes"]["description"]).group("url") .split(".")[-1].split(")")[0],
+                "type" : "ADDED"
+            }
+            substrings = []
+            in_brackets = False
+            current_substring = ""
+
+            for c in self.event["object_attributes"]["note"]:
+                if c == "[":
+                    in_brackets = True
+                elif c == "]" and in_brackets:
+                    substrings.append(current_substring)
+                    current_substring = ""
+                    in_brackets = False
+                elif in_brackets:
+                    current_substring += c
+
+            if current_substring:
+                substrings.append(current_substring)
+            attachment_doc["filename"] = substrings[0]
+            return [attachment_doc]
+        except:
+            raise as_exceptions.SkipFieldToNormalize(
+                "Ignoring attachments as there is no attachment")
+
 
 
 class Outbound(BaseOutbound):
@@ -175,17 +302,33 @@ class Outbound(BaseOutbound):
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
 
     def transform_fields(self, transfome_field_objs):
+
         if self.inbound.event_type == EventTypes.CREATE:
             create_fields = {}
             multivalues = []
+            multivalues_add = []
             for outbound_field in transfome_field_objs:
                 if outbound_field.is_multivalue:
-                    for values in outbound_field.value:
-                        multivalues.append(values["field_value"])
-                        create_fields[outbound_field.name.lower()] = multivalues
+                    if outbound_field.value:
+                        if outbound_field.name == "assignee_ids":
+                            for vals in outbound_field.value:
+                                multivalues_add.append(vals['id'])
+                            create_fields["assignee_ids"] = multivalues_add
+
+                        else:
+                            for values in outbound_field.value:
+                                multivalues.append(values["field_value"])
+                                create_fields[outbound_field.name.lower()] = multivalues
                 else:
-                    field_name = outbound_field.name
-                    field_value = outbound_field.value
+
+                    if outbound_field.name == "milestone_id":
+                        title = transformer_functions.get_milestone_id(self.instance_object, self.project_info,
+                                                                       outbound_field.value)
+                        field_name = outbound_field.name
+                        field_value = title
+                    else:
+                        field_name = outbound_field.name
+                        field_value = outbound_field.value
                     create_fields[field_name.lower()] = field_value
             parent_val = self.transform_parent_id()
             if parent_val[0] is not None:
@@ -193,27 +336,73 @@ class Outbound(BaseOutbound):
 
             return create_fields
         else:
-            create_fields = {}
+            create_fields = {"issue_type":"issue"}
             multivalues_add = []
             multivalues_rem = []
+            users = []
             for outbound_field in transfome_field_objs:
                 if outbound_field.is_multivalue:
-                    for values in outbound_field.value:
-                       
-                        if values["act"] == "add":
-                            multivalues_add.append(values["field_value"])
-                            create_fields["add_labels"] = multivalues_add
-                        if values["act"] == "remove":
-                            multivalues_rem.append(values["field_value"])
-                            create_fields["remove_labels"] = multivalues_rem
+                    if outbound_field.value:
+                        for values in outbound_field.value:
+                            if outbound_field.name == "assignee_ids":
+                                assigeens = transformer_functions.get_assignee(self.instance_object, self.project_info,
+                                                                               self.workitem_display_id)
+                                
+                                for value in assigeens:
+                                    if value == values["id"] and values["act"] == "remove":
+                                        continue
+                                    
+                                    users.append(value)
+                                if values["act"] == "add" and values["id"] not in users:
+                                    users.append(values["id"])
+                                
+                                
+                                create_fields["assignee_ids"] = users
+                            else:
+                                if values["act"] == "add":
+                                    multivalues_add.append(values["field_value"])
+                                    create_fields["add_labels"] = multivalues_add
+                                if values["act"] == "remove":
+                                    multivalues_rem.append(values["field_value"])
+                                    create_fields["remove_labels"] = multivalues_rem
                 else:
-                    field_name = outbound_field.name
-                    field_value = outbound_field.value
+                    if outbound_field.name == "milestone_id":
+                        title = transformer_functions.get_milestone_id(self.instance_object, self.project_info,
+                                                                       outbound_field.value)
+                        field_name = outbound_field.name
+                        field_value = title
+                    else:
+                        field_name = outbound_field.name
+                        field_value = outbound_field.value
                     create_fields[field_name.lower()] = field_value
             parent_val = self.transform_parent_id()
             if parent_val[0] is not None:
                 create_fields["epic_id"] = parent_val[0]
             return create_fields
+
+    def transform_usertype_multivalue(self, value, field_obj):
+        # To reset multi select user field
+        user = value
+        user_id = []
+        try:
+            for no in range(len(user)):
+                if 'username' in user[no]["field_value"]:
+                    info = transformer_functions.user_details(self.instance_object, self.project_info)
+                    if info:
+                        for vals in info:
+                            if user[no]["field_value"]["username"] == vals["username"] or user[no]["field_value"][
+                                "username"] == vals["name"] :
+                                user_id.append({"act": user[no]["act"], "id": vals["id"]})
+
+                if not user_id:
+                    err_msg = "Unable to transform user [{}] as user does not exist.".format(user)
+                    raise as_exceptions.SkipFieldToSync(err_msg)
+        except HTTPError as e:
+            as_log.error('gitlab/OutboundTransformer - Get user info failed.  Error is [{}].'.format(str(e)))
+        except Exception as e:
+            as_log.error('gitlab/OutboundTransformer - Get user info failed.  Error is [%s].' % (str(e)))
+        finally:
+            return user_id
 
     def create(self, sync_fields):
 
@@ -259,6 +448,7 @@ class Outbound(BaseOutbound):
             payload = {
                 "body": comment
             }
+            transformer_functions.comment(self.instance_object,self.project_info,payload,self.workitem_display_id)
 
 
         except Exception as e:
