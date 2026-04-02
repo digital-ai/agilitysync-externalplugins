@@ -18,18 +18,22 @@ from datetime import datetime
 from dateutil import parser
 import time
 import json
+from urllib.parse import quote, parse_qs
 from external_plugins.gitlab import transformer_functions
 from requests.exceptions import HTTPError
+from agilitysync.lib.plugin_manage import plugin_schema
+from agilitysync.external_lib.restapi import ASyncRestApi
+from bson import ObjectId
 
 class AttachmentUpload(BaseAttachmentUpload):
 
     def fetch_url(self):
 
-        return "{}/{}".format("'https://gitlab.com",self.private_data["url"])
+        return "{}/{}".format("https://gitlab.com", self.private_data["url"])
 
     def fetch_upload_url(self):
-
-        return "{}/{}/{}/{}".format(self.instance_details["url"],"projects",self.outbound.project_info["project"],"uploads")
+        api_url = transformer_functions.get_api_url(self.instance_details["url"])
+        return "{}/{}/{}/{}".format(api_url, "projects", self.outbound.project_info["project"], "uploads")
     def fetch_multipart_data(self, storage_obj):
         payload = {
             "file" : storage_obj
@@ -54,7 +58,9 @@ class AttachmentUpload(BaseAttachmentUpload):
 
 
         except Exception as e:
-            error_msg = 'Unable to sync comment. Error is [{}]. The comment is [{}]'.format(str(e), comment)
+            error_msg = 'Unable to sync comment. Error is [{}]. The comment is [{}]'.format(
+                str(e), payload.get("body", "")
+            )
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
 
     def remove(self, attachment_id, verify_tls):
@@ -63,16 +69,130 @@ class AttachmentUpload(BaseAttachmentUpload):
                                   {'id': attachment_id}, query_str="op=Delete")
 class AttachmentDownload(BaseAttachmentDownload):
     def basic_auth(self):
-        return {"rohithamroser","Pwe_96fww3:PF6h"}
+        return None
 
 class Payload(BasePayload):
 
+    def _get_instance_details(self):
+        if getattr(self, "_payload_instance_details", None) is None:
+            details = plugin_schema.get_plugin_instance_by_id(self.instance_id, self.db)
+            if "url" in details:
+                details["url"] = details["url"].rstrip("/")
+            self._payload_instance_details = details
+        return self._payload_instance_details
+
+    def _get_instance_object(self):
+        if getattr(self, "_payload_instance_object", None) is None:
+            details = self._get_instance_details()
+            # Group work-item lookup may run with PAT tokens where PRIVATE-TOKEN auth is required.
+            self._payload_instance_object = ASyncRestApi(transformer_functions.get_api_url(details['url']), headers={
+                "PRIVATE-TOKEN": "{}".format(details["token"]),
+                "Accept": "application/json",
+                "Content-Type": "application/json"
+            })
+        return self._payload_instance_object
+
+    def _group_full_path_from_url(self, event):
+        workitem_url = (event.get("object_attributes") or {}).get("url", "")
+        # Example: https://gitlab.com/groups/my-group/-/work_items/4
+        match = re.search(r"/groups/(?P<group_path>.+?)/-/work_items/", workitem_url)
+        return match.group("group_path") if match else None
+
+    def _group_id_from_event(self, event):
+        group_path = self._group_full_path_from_url(event)
+        if not group_path:
+            return None
+
+        # GitLab group paths can contain '/'; API expects URL-encoded full path.
+        encoded_group = quote(group_path, safe="")
+        try:
+            group_info = self._get_instance_object().get("groups/{}".format(encoded_group))
+        except Exception:
+            # Fallback to plugin's standard connector for environments using bearer-style tokens.
+            group_info = transformer_functions.connect(self._get_instance_details()).get("groups/{}".format(encoded_group))
+        return str(group_info.get("id")) if group_info and group_info.get("id") is not None else None
+
+    def _handler_name_from_event(self, event):
+        if event.get("handler"):
+            return event.get("handler")
+
+        headers = event.get("__HEADERS") or {}
+        query = headers.get("query") or headers.get("QUERY_STRING") or ""
+        if query.startswith("?"):
+            query = query[1:]
+
+        handler_name = parse_qs(query).get("handler")
+        return handler_name[0] if handler_name else None
+
+    def _project_from_handler_mapping(self, event):
+        handler_name = self._handler_name_from_event(event)
+        if not handler_name:
+            return None
+
+        webhook_doc = self.db.webhookhandlers.find_one({"name": handler_name})
+        if not webhook_doc:
+            return None
+
+        args = ((webhook_doc.get("directives") or [{}])[0].get("details") or {}).get("args") or {}
+        map_names = args.get("map_names") or []
+        no_project_candidates = []
+
+        for map_name in map_names:
+            try:
+                map_doc = self.db.data_map.find_one({"_id": ObjectId(map_name), "active": True})
+            except Exception:
+                map_doc = None
+            if not map_doc:
+                continue
+
+            for direction in ("forward-direction", "backward-direction"):
+                direction_doc = map_doc.get(direction) or {}
+                inbound_doc = direction_doc.get("inbound") or {}
+                if inbound_doc.get("instance_id") != self.instance_id:
+                    continue
+
+                for system_map in direction_doc.get("system_mapping") or []:
+                    project_info = ((system_map.get("inbound_plugin_config") or {}).get("project_info") or {})
+                    if project_info.get("id") == "no_project" and project_info.get("project"):
+                        no_project_candidates.append(project_info.get("project"))
+
+        # Remove duplicates while preserving order.
+        unique_candidates = list(dict.fromkeys(no_project_candidates))
+
+        if len(unique_candidates) == 1:
+            return unique_candidates[0]
+
+        if len(unique_candidates) > 1:
+            # If handler has multiple no-project mappings, use event group id to disambiguate.
+            group_id = self._group_id_from_event(event)
+            if group_id:
+                for candidate in unique_candidates:
+                    if str(candidate).split("/", 1)[0] == str(group_id):
+                        return candidate
+
+        return None
+
     def fetch_project(self, event):
-        project = str(event["project"]["id"])
-        org = event['project']['namespace']
-        return project
+        if event.get("project") and event["project"].get("id") is not None:
+            return str(event["project"]["id"])
+
+        # Fallback for older GitLab webhook formats where project_id is at root level
+        if event.get("project_id") is not None:
+            return str(event["project_id"])
+
+        mapped_project = self._project_from_handler_mapping(event)
+        if mapped_project:
+            return mapped_project
+
+        group_id = self._group_id_from_event(event)
+        if group_id:
+            return "{}/No Project".format(group_id)
+
+        raise as_exceptions.PayloadError("Unable to derive project/group id from GitLab payload")
 
     def fetch_asset(self, event):
+        if event.get("object_kind") == "work_item" and (event.get("object_attributes") or {}).get("type") == "Epic":
+            return "Assettype-002"
         return "Assettype-001"
 
     def is_cyclic_event(self, event, sync_user):
@@ -83,12 +203,12 @@ class Event(BaseEvent):
 
     def fetch_event_type(self):
 
-        if self.event['object_attributes']["updated_at"] == self.event['object_attributes']["created_at"]:
-            event_type = "open"
-        if self.event['object_attributes']["updated_at"] != self.event['object_attributes']["created_at"] or self.event["event_type"] == "note" :
+        if self.event["event_type"] == "note":
             event_type = "update"
+        elif self.event['object_attributes']["updated_at"] == self.event['object_attributes']["created_at"]:
+            event_type = self.event['object_attributes'].get("action", "open")
         else:
-            event_type = self.event['object_attributes']["action"]
+            event_type = self.event['object_attributes'].get("action", "update")
 
         if event_type in ('open'):
             return EventTypes.CREATE
@@ -101,7 +221,7 @@ class Event(BaseEvent):
         raise as_exceptions.PayloadError(error_msg)
 
     def fetch_workitem_id(self):
-        if self.event["event_type"] == "issue":
+        if self.event["event_type"] in ("issue", "work_item"):
             return str(self.event['object_attributes']['id'])
         else:
             return str(self.event['issue']['id'])
@@ -113,7 +233,7 @@ class Event(BaseEvent):
             return self.event['object_attributes']['id']
 
     def fetch_workitem_url(self):
-        return "/".join(self.event['object_attributes']['url'].split("/")[1:])
+        return "/".join(self.event['object_attributes']['url'].split("/")[3:])
 
     def fetch_revision(self):
         return self.event['object_attributes']["updated_at"]
@@ -144,15 +264,18 @@ class Inbound(BaseInbound):
 
     def fetch_event_category(self):
         category = []
+        object_kind = self.event.get("object_kind") or self.event.get("event_type") or ""
 
-        if self.event['object_attributes'].get("action") is not None:
-
+        if object_kind == "note":
+            note_text = self.event['object_attributes'].get("note") or ""
+            if "/upload/" in note_text:
+                category.append(EventCategory.ATTACHMENT)
+            else:
+                category.append(EventCategory.COMMENT)
+        elif object_kind in ("issue", "work_item") or self.event['object_attributes'].get("action") is not None:
             category.append(EventCategory.WORKITEM)
-        elif self.event['object_attributes']["note"].find("/upload/") is True:
-            category.append(EventCategory.ATTACHMENT)
         else:
             category.append(EventCategory.COMMENT)
-
 
         return category
 

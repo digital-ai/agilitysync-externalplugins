@@ -248,6 +248,12 @@ class AssetsManage(BaseAssetsManage):
 
 class WebHook(BaseWebHook):
 
+    @staticmethod
+    def _extract_group_id(project_info):
+        # No Project stores organization id as "<group_id>/No Project".
+        project_value = str(project_info.get("project", ""))
+        return project_value.split("/", 1)[0]
+
     def create_webhook(self, webhook_name, webhook_url, webhook_description, project_id):
         payload = {
 
@@ -258,5 +264,13 @@ class WebHook(BaseWebHook):
         }  # Payload data to create single webhook
 
         for project in self.projects_info:
-            transformer_functions.webhooks(self.instance_obj, id=project['project']
-                                           , payload=payload)
+            if project["id"] != project_id:
+                continue
+
+            if project["id"] == "no_project":
+                group_id = self._extract_group_id(project)
+                transformer_functions.group_webhooks(self.instance_obj, id=group_id, payload=payload)
+            else:
+                transformer_functions.webhooks(self.instance_obj, id=project['project'], payload=payload)
+
+            break

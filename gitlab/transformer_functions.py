@@ -176,8 +176,15 @@ def epicfields():
     return fields_epic
 
 
+def get_api_url(url):
+    base_url = str(url).rstrip("/")
+    if base_url.endswith("/api/v4"):
+        return base_url
+    return "{}/api/v4".format(base_url)
+
+
 def connect(instance_details):
-    return ASyncRestApi(instance_details['url'], headers={
+    return ASyncRestApi(get_api_url(instance_details['url']), headers={
         "authorization": "Bearer {}".format(instance_details["token"]),
         "Accept": "application/json",
         "Content-Type": "application/json"
@@ -354,6 +361,21 @@ def webhooks(instance, id, payload=None):
     instance_path = "hooks"
     path = "{}/{}/{}".format(
         "projects",
+        id,
+        instance_path)
+
+    if payload:
+        response = instance.post(path, payload)
+        return response
+    else:
+        response = instance.get(path)
+        return response
+
+
+def group_webhooks(instance, id, payload=None):
+    instance_path = "hooks"
+    path = "{}/{}/{}".format(
+        "groups",
         id,
         instance_path)
 
