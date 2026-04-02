@@ -28,8 +28,8 @@ from bson import ObjectId
 class AttachmentUpload(BaseAttachmentUpload):
 
     def fetch_url(self):
-
-        return "{}/{}".format("https://gitlab.com", self.private_data["url"])
+        
+         return "{}/{}".format("'https://gitlab.com",self.private_data["url"])
 
     def fetch_upload_url(self):
         api_url = transformer_functions.get_api_url(self.instance_details["url"])
@@ -50,12 +50,11 @@ class AttachmentUpload(BaseAttachmentUpload):
         res = []
         res.append(eval(response.text))
         self.private_data = eval(response.text)
+        payload = {
+            "body": "![{}]({})".format(self.filename, res[0]["url"])
+        }
         try:
-            payload = {
-                "body": "![{}]({})".format(self.filename,res[0]["url"])
-            }
             transformer_functions.comment(self.instance_object, self.outbound.project_info, payload, self.outbound.workitem_display_id)
-
 
         except Exception as e:
             error_msg = 'Unable to sync comment. Error is [{}]. The comment is [{}]'.format(
@@ -210,11 +209,11 @@ class Event(BaseEvent):
         else:
             event_type = self.event['object_attributes'].get("action", "update")
 
-        if event_type in ('open'):
+        if event_type == "open":
             return EventTypes.CREATE
-        elif event_type == ('close'):
+        elif event_type == "close":
             return EventTypes.DELETE
-        elif event_type in ('update',):
+        elif event_type == "update":
             return EventTypes.UPDATE
 
         error_msg = 'Unsupported event type [{}]'.format(event_type)
