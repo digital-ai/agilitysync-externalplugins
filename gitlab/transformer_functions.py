@@ -500,9 +500,17 @@ def get_assignee(instance, proj_id,work_id):
 
     return vals
 
-def comment(instance,proj_id,payload,workid):
+def comment(instance, proj_id, payload, workid):
+    project_val = str(proj_id["project"])
 
-    path ="{}/{}/{}/{}/{}".format("projects",proj_id["project"],"issues",workid,"notes")
+    if proj_id.get("display_name") == "No Project" or project_val.endswith("/No Project"):
+        # Epic: use Work Items Notes API (available on all tiers).
+        # The Epics Notes API (/groups/:id/epics/:iid/notes) is GitLab Premium only.
+        group_id = project_val.split("/")[0]
+        path = "{}/{}/{}/{}/{}".format("groups", group_id, "epics", workid, "notes")
+    else:
+        # Issue: POST /projects/<project_id>/issues/<iid>/notes
+        path = "{}/{}/{}/{}/{}".format("projects", project_val, "issues", workid, "notes")
 
-    return instance.post(path,payload)
+    return instance.post(path, payload)
 
