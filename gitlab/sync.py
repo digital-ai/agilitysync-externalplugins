@@ -281,13 +281,32 @@ class Inbound(BaseInbound):
     def fetch_parent_id(self):
         parent_id = None
         old_parent_id = None
-        _id = transformer_functions.get_parent_id(proj_id=self.event['object_attributes']["project_id"],
-                                                  iid=self.event['object_attributes']["iid"],
+        # project_id may be absent from object_attributes in work_item events;
+        # fall back to root-level project_id or project.id
+        proj_id = (
+            self.event['object_attributes'].get("project_id")
+            or self.event.get("project_id")
+            or (self.event.get("project") or {}).get("id")
+        )
+        iid = self.event['object_attributes'].get("iid")
+        if not proj_id or not iid:
+            return None, old_parent_id
+        _id = transformer_functions.get_parent_id(proj_id=proj_id,
+                                                  iid=iid,
                                                   instance=self.instance_object)
-        if _id["epic"] is not None:
-            parent_id = _id["epic"]["id"]
+        if _id and isinstance(_id, dict) and (_id.get("epic") is not None):
+            epic_info = _id["epic"]
+            group_id = epic_info.get("group_id")
+            epic_iid = epic_info.get("iid")
+            if group_id and epic_iid:
+                try:
+                    epic_detail = transformer_functions.get_epic(
+                        self.instance_object, {"project": str(group_id)}, epic_iid)
+                    parent_id = epic_detail.get("work_item_id")
+                except Exception:
+                    parent_id = None
 
-        return str(parent_id), old_parent_id
+        return parent_id, old_parent_id
 
     def normalize_texttype_multivalue_field(self, field_value, field_attr):
        
@@ -317,6 +336,28 @@ class Inbound(BaseInbound):
         return vals
 
     def migrate_create(self):
+        is_epic = self.project_info.get("display_name") == "No Project"
+
+        if is_epic:
+            res = transformer_functions.get_epic(self.instance_object, self.project_info, self.workitem_display_id)
+            event = {"object_attributes": res}
+            labels = []
+            for label_title in (res.get("labels") or []):
+                labels.append({
+                    "created_at": res["created_at"],
+                    "updated_at": res["updated_at"],
+                    "title": label_title,
+                })
+            event["object_attributes"]["action"] = "open"
+            event["object_kind"] = "work_item"
+            event["event_type"] = "work_item"
+            event["object_attributes"]["type"] = "Epic"
+            event["object_attributes"]["created_at"] = res["created_at"]
+            event["object_attributes"]["updated_at"] = res["created_at"]
+            event["object_attributes"]["labels"] = labels
+            event["object_attributes"]["url"] = res.get("web_url") or res.get("url", "")
+            return [event]
+
         res = transformer_functions.get_issue(self.instance_object, self.project_info, self.workitem_display_id)
         event = {
 
@@ -543,7 +584,9 @@ class Outbound(BaseOutbound):
             xref_object = {
                 "relative_url": "{}/{}/{}/{}".format("repos", org, self.project_info["display_name"], "issues"),
                 'id': str(ticket['id']),
-                'display_id': str(ticket['iid']),
+                # For epics, GitLab 15.9+ returns work_item_iid alongside iid.
+                # Work Items Notes API uses work_item_iid; fall back to iid if not present.
+                'display_id': str(ticket.get('work_item_iid') or ticket['iid']),
                 'sync_info': sync_info,
             }
             xref_object["absolute_url"] = xref_object["relative_url"]

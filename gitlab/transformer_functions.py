@@ -130,18 +130,18 @@ fields_epic = [
         "required": False,
         "disabled field": False,
         "customfield": False,
-        "raw_title": "start_date_fixed",
-        "title": "start_date_fixed",
-        "type": "start_date_fixed",
+        "raw_title": "start_date",
+        "title": "start_date",
+        "type": "start_date",
         "IsMultivalue": False
     },
     {
         "required": False,
         "disabled field": False,
         "customfield": False,
-        "raw_title": "due_date_fixed",
-        "title": "due_date_fixed",
-        "type": "due_date_fixed",
+        "raw_title": "due_date",
+        "title": "due_date",
+        "type": "due_date",
         "IsMultivalue": False
     },
     {
@@ -172,6 +172,12 @@ def get_issue(instance, proj_id, workid):
     return instance.get(path)
 
 
+def get_epic(instance, proj_id, workid):
+    group_id = str(proj_id["project"]).split("/")[0]
+    path = "{}/{}/{}/{}".format("groups", group_id, "epics", workid)
+    return instance.get(path)
+
+
 def epicfields():
     return fields_epic
 
@@ -184,26 +190,24 @@ def get_api_url(url):
 
 
 def connect(instance_details):
+    if not instance_details.get('url'):
+        raise ValueError("GitLab URL is required. Please provide the domain URL in the instance configuration.")
     return ASyncRestApi(get_api_url(instance_details['url']), headers={
-        "authorization": "Bearer {}".format(instance_details["token"]),
+        "PRIVATE-TOKEN": "{}".format(instance_details["token"]),
         "Accept": "application/json",
         "Content-Type": "application/json"
     })
 
 
 def check_connection(instance, instance_details):
-    path = "{}".format(
-        DEFAULT.INITIAL_PATH,
-        instance_details["Username"]
-
-    )
+    path = "{}".format(DEFAULT.INITIAL_PATH)
 
     response = instance.get(path)
 
-    if instance_details["Username"] == response["username"]:
+    if response.get("username"):
         return "Connection to Gitlab server is successfull."
     else:
-        return response["error"]
+        raise Exception("GitLab API did not return a valid user. Please verify your token.")
 
 
 def get_org(instance):
@@ -404,8 +408,8 @@ def get_parent_id(proj_id, iid, instance):
     try:
         response = instance.get(path)
         return response
-    except:
-        return response["error"]
+    except Exception:
+        return None
 
 
 def multivalue_fetch(instance, proj_id, field):

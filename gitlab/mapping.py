@@ -113,6 +113,10 @@ class Field(BaseField):
                 "type": fields_type["DATE"],
                 "system": "due_date_fixed"
             },
+            "start_date":{
+                "type":fields_type["DATE"],
+                "system": "start_date"
+            },
             "due_date":{
                 "type":fields_type["DATE"],
                 "system": "due_date"
