@@ -267,7 +267,7 @@ class Inbound(BaseInbound):
 
         if object_kind == "note":
             note_text = self.event['object_attributes'].get("note") or ""
-            if "/upload/" in note_text:
+            if "/uploads/" in note_text:
                 category.append(EventCategory.ATTACHMENT)
             else:
                 category.append(EventCategory.COMMENT)
@@ -275,7 +275,7 @@ class Inbound(BaseInbound):
             category.append(EventCategory.WORKITEM)
         else:
             category.append(EventCategory.COMMENT)
-
+ 
         return category
 
     def fetch_parent_id(self):
@@ -418,36 +418,51 @@ class Inbound(BaseInbound):
         return self.event['object_attributes']["note"]
 
     def fetch_attachments_metadata(self):
-        
         try:
+            note_text = self.event['object_attributes'].get("note") or ""
+            # GitLab markdown formats:
+            #   image:  ![filename](/uploads/hash/file.ext){optional attrs}
+            #   file:   [filename](/uploads/hash/file.ext)
+            # Match both — require /uploads/ in path to avoid false positives
+            match = re.search(r"!?\[(?P<filename>[^\]]+)\]\((?P<path>/uploads/[^)]+)\)", note_text)
+            if not match:
+                raise as_exceptions.SkipFieldToNormalize(
+                    "Ignoring attachments as there is no attachment")
+
+            filename = match.group("filename")
+            raw_path = match.group("path").strip()
+
+            # Build absolute URL.
+            # GitLab upload format: {base}/-/project/{project_id}/uploads/{hash}/{file}
+            if raw_path.startswith("http://") or raw_path.startswith("https://"):
+                full_url = raw_path
+            else:
+                base_url = str(self.instance_details["url"]).rstrip("/")
+                if base_url.endswith("/api/v4"):
+                    base_url = base_url[:-7]
+                project_id = (self.event.get("project") or {}).get("id", "")
+                full_url = "{}/{}/{}".format(
+                    base_url,
+                    "-/project/{}".format(project_id),
+                    raw_path.lstrip("/")
+                )
+
+            content_type = raw_path.split(".")[-1].split("{")[0].strip()
+
             attachment_doc = {
                 "id": self.event['object_attributes']['id'],
                 "headers": {
-                    "Authorization": "Bearer {}".format(self.instance_details["token"])
+                    "PRIVATE-TOKEN": "{}".format(self.instance_details["token"])
                 },
-                "url" : re.search("(?P<url>https?://[^\s]+)", self.event["object_attributes"]["description"]).group("url").split(")")[0],
-                "content_type" : re.search("(?P<url>https?://[^\s]+)", self.event["object_attributes"]["description"]).group("url") .split(".")[-1].split(")")[0],
-                "type" : "ADDED"
+                "url": full_url,
+                "content_type": content_type,
+                "filename": filename,
+                "type": "ADDED"
             }
-            substrings = []
-            in_brackets = False
-            current_substring = ""
-
-            for c in self.event["object_attributes"]["note"]:
-                if c == "[":
-                    in_brackets = True
-                elif c == "]" and in_brackets:
-                    substrings.append(current_substring)
-                    current_substring = ""
-                    in_brackets = False
-                elif in_brackets:
-                    current_substring += c
-
-            if current_substring:
-                substrings.append(current_substring)
-            attachment_doc["filename"] = substrings[0]
             return [attachment_doc]
-        except:
+        except as_exceptions.SkipFieldToNormalize:
+            raise
+        except Exception:
             raise as_exceptions.SkipFieldToNormalize(
                 "Ignoring attachments as there is no attachment")
 
