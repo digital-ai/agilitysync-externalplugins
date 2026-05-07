@@ -66,13 +66,13 @@
     ],
     "additional_mapping" : {
         "attachment" : {
-            "enabled" : true 
+            "enabled" : false 
         },
         "comment" : {
             "enabled" : true
         },
         "relationship" : {
-            "enabled" : true
+            "enabled" : false
         },
         "sync_reference" : {
             "enabled" : true
@@ -82,7 +82,7 @@
             "enabled" : true
         },
         "data_migration" : {
-            "enabled" : true
+            "enabled" : false
         }
     }
 }

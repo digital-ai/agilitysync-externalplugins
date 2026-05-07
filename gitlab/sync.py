@@ -201,13 +201,31 @@ class Payload(BasePayload):
 class Event(BaseEvent):
 
     def fetch_event_type(self):
-
+        raw_action = self.event['object_attributes'].get("action")
+        event_kind = self.event.get("event_type") or self.event.get("object_kind")
+        created_at = self.event['object_attributes'].get("created_at")
+        updated_at = self.event['object_attributes'].get("updated_at")
+        workitem_id = self.event['object_attributes'].get("id")
+        as_log.info(
+            "gitlab/fetch_event_type - workitem_id=[{}] event_kind=[{}] action=[{}] "
+            "created_at=[{}] updated_at=[{}] timestamps_equal=[{}]".format(
+                workitem_id, event_kind, raw_action, created_at, updated_at,
+                created_at == updated_at
+            )
+        )
         if self.event["event_type"] == "note":
             event_type = "update"
         elif self.event['object_attributes']["updated_at"] == self.event['object_attributes']["created_at"]:
             event_type = self.event['object_attributes'].get("action", "open")
         else:
             event_type = self.event['object_attributes'].get("action", "update")
+            
+            # GitLab work_item (Epic) webhooks always emit action="open" for both creates and
+            # updates. Since timestamps differ here, it is an update — not a create.
+            if event_type == "open":
+                event_type = "update"
+
+        as_log.info("gitlab/fetch_event_type - resolved event_type=[{}]".format(event_type))
 
         if event_type == "open":
             return EventTypes.CREATE
@@ -226,13 +244,19 @@ class Event(BaseEvent):
             return str(self.event['issue']['id'])
 
     def fetch_workitem_display_id(self):
+        event_type = self.event.get("event_type") or self.event.get("object_kind") or ""
+        if event_type == "note":
+            # For comment/attachment events, return the parent issue/work_item iid
+            if self.event.get("issue"):
+                return self.event["issue"]["iid"]
+            if self.event.get("work_item"):
+                return self.event["work_item"].get("iid") or self.event["work_item"].get("id")
         if self.event['object_attributes'].get("iid") is not None:
             return self.event['object_attributes']['iid']
-        else:
-            return self.event['object_attributes']['id']
+        return self.event['object_attributes']['id']
 
     def fetch_workitem_url(self):
-        return "/".join(self.event['object_attributes']['url'].split("/")[3:])
+        return "/" + "/".join(self.event['object_attributes']['url'].split("/")[3:])
 
     def fetch_revision(self):
         return self.event['object_attributes']["updated_at"]
@@ -432,19 +456,17 @@ class Inbound(BaseInbound):
             filename = match.group("filename")
             raw_path = match.group("path").strip()
 
-            # Build absolute URL.
-            # GitLab upload format: {base}/-/project/{project_id}/uploads/{hash}/{file}
+            project_id = (self.event.get("project") or {}).get("id", "")
             if raw_path.startswith("http://") or raw_path.startswith("https://"):
                 full_url = raw_path
             else:
                 base_url = str(self.instance_details["url"]).rstrip("/")
                 if base_url.endswith("/api/v4"):
                     base_url = base_url[:-7]
-                project_id = (self.event.get("project") or {}).get("id", "")
                 full_url = "{}/{}/{}".format(
                     base_url,
-                    "-/project/{}".format(project_id),
-                    raw_path.lstrip("/")
+                    "-/project/{}/uploads".format(project_id),
+                    "/".join(raw_path.lstrip("/").split("/")[1:])
                 )
 
             content_type = raw_path.split(".")[-1].split("{")[0].strip()
@@ -466,6 +488,24 @@ class Inbound(BaseInbound):
             raise as_exceptions.SkipFieldToNormalize(
                 "Ignoring attachments as there is no attachment")
 
+    def create_remote_link(self, display_id, url, id_field=None, url_field=None):
+        try:
+            fields = {}
+            if id_field:
+                fields[id_field['name']] = str(display_id)
+            if url_field:
+                fields[url_field['name']] = str(url)
+            if fields:
+                transformer_functions.update_tickets(
+                    self.instance_object,
+                    payload=fields,
+                    id=self.project_info["project"],
+                    name=self.project_info.get("display_name", ""),
+                    parentid=(None, None),
+                    workid=self.workitem_display_id
+                )
+        except Exception as e:
+            as_log.warn('gitlab/Inbound.create_remote_link - Unable to update sync reference field. Error is [{}].'.format(e))
 
 
 class Outbound(BaseOutbound):
@@ -482,6 +522,7 @@ class Outbound(BaseOutbound):
     def transform_fields(self, transfome_field_objs):
 
         if self.inbound.event_type == EventTypes.CREATE:
+            is_epic = self.project_info.get("display_name") == "No Project"
             create_fields = {}
             multivalues = []
             multivalues_add = []
@@ -507,6 +548,16 @@ class Outbound(BaseOutbound):
                     else:
                         field_name = outbound_field.name
                         field_value = outbound_field.value
+                    # Epics use due_date_fixed/start_date_fixed instead of due_date/start_date
+                    if is_epic:
+                        if field_name.lower() == "due_date" and field_value:
+                            create_fields["due_date_fixed"] = str(field_value).split("T")[0]
+                            create_fields["due_date_is_fixed"] = True
+                            continue
+                        if field_name.lower() == "start_date" and field_value:
+                            create_fields["start_date_fixed"] = str(field_value).split("T")[0]
+                            create_fields["start_date_is_fixed"] = True
+                            continue
                     create_fields[field_name.lower()] = field_value
             parent_val = self.transform_parent_id()
             if parent_val[0] is not None:
@@ -514,7 +565,8 @@ class Outbound(BaseOutbound):
 
             return create_fields
         else:
-            create_fields = {"issue_type":"issue"}
+            is_epic = self.project_info.get("display_name") == "No Project"
+            create_fields = {} if is_epic else {"issue_type": "issue"}
             multivalues_add = []
             multivalues_rem = []
             users = []
@@ -552,6 +604,19 @@ class Outbound(BaseOutbound):
                     else:
                         field_name = outbound_field.name
                         field_value = outbound_field.value
+                    # Epics use due_date_fixed/start_date_fixed instead of due_date/start_date
+                    if is_epic:
+                        if field_name.lower() == "due_date" and field_value:
+                            create_fields["due_date_fixed"] = str(field_value).split("T")[0]
+                            create_fields["due_date_is_fixed"] = True
+                            continue
+                        if field_name.lower() == "start_date" and field_value:
+                            create_fields["start_date_fixed"] = str(field_value).split("T")[0]
+                            create_fields["start_date_is_fixed"] = True
+                            continue
+                    # GitLab issues expect YYYY-MM-DD for due_date, strip time if present
+                    if field_name.lower() == "due_date" and field_value:
+                        field_value = str(field_value).split("T")[0]
                     create_fields[field_name.lower()] = field_value
             parent_val = self.transform_parent_id()
             if parent_val[0] is not None:
@@ -596,15 +661,19 @@ class Outbound(BaseOutbound):
                 "issuetype": "issues",
                 "synced_fields": sync_fields
             }
+            web_url = ticket.get('web_url') or ''
+            xref_id = str(ticket['id'])
+            as_log.info("gitlab/Outbound.create - ticket id=[{}] work_item_id=[{}] using xref_id=[{}]".format(
+                ticket.get('id'), ticket.get('work_item_id'), xref_id))
             xref_object = {
-                "relative_url": "{}/{}/{}/{}".format("repos", org, self.project_info["display_name"], "issues"),
-                'id': str(ticket['id']),
+                "relative_url": "/".join(web_url.split("/")[3:]) if web_url else web_url,
+                'id': str(ticket['work_item_id']),
                 # For epics, GitLab 15.9+ returns work_item_iid alongside iid.
                 # Work Items Notes API uses work_item_iid; fall back to iid if not present.
                 'display_id': str(ticket.get('work_item_iid') or ticket['iid']),
                 'sync_info': sync_info,
             }
-            xref_object["absolute_url"] = xref_object["relative_url"]
+            xref_object["absolute_url"] = web_url
             return xref_object
         except Exception as e:
             error_msg = ("Unable to create [{}] in Gitlab. Error is [{}].\n Trying to sync fields \n"
@@ -622,6 +691,25 @@ class Outbound(BaseOutbound):
             error_msg = ('Unable to sync fields in Gitlab. Error is [{}]. Trying to sync fields \n'
                          '[{} {}]\n.'.format(e, " ", sync_fields))
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
+
+    def create_remote_link(self, workitem_id, url, id_field=None, url_field=None):
+        try:
+            fields = {}
+            if id_field:
+                fields[id_field['name']] = str(workitem_id)
+            if url_field:
+                fields[url_field['name']] = str(url)
+            if fields:
+                transformer_functions.update_tickets(
+                    self.instance_object,
+                    payload=fields,
+                    id=self.project_info["project"],
+                    name=self.project_info["display_name"],
+                    parentid=(None, None),
+                    workid=self.workitem_display_id
+                )
+        except Exception as e:
+            as_log.warn('gitlab/create_remote_link - Unable to update sync reference field. Error is [{}].'.format(e))
 
     def comment_create(self, comment):
         try:
