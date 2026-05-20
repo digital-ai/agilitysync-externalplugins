@@ -604,15 +604,16 @@ class Outbound(BaseOutbound):
                     else:
                         field_name = outbound_field.name
                         field_value = outbound_field.value
-                    # Epics use due_date_fixed/start_date_fixed instead of due_date/start_date
+                    # Epics use due_date_fixed/start_date_fixed instead of due_date/start_date.
+                    # Always redirect (even when clearing — None clears the fixed date).
                     if is_epic:
-                        if field_name.lower() == "due_date" and field_value:
-                            create_fields["due_date_fixed"] = str(field_value).split("T")[0]
-                            create_fields["due_date_is_fixed"] = True
+                        if field_name.lower() == "due_date":
+                            create_fields["due_date_fixed"] = str(field_value).split("T")[0] if field_value else None
+                            create_fields["due_date_is_fixed"] = bool(field_value)
                             continue
-                        if field_name.lower() == "start_date" and field_value:
-                            create_fields["start_date_fixed"] = str(field_value).split("T")[0]
-                            create_fields["start_date_is_fixed"] = True
+                        if field_name.lower() == "start_date":
+                            create_fields["start_date_fixed"] = str(field_value).split("T")[0] if field_value else None
+                            create_fields["start_date_is_fixed"] = bool(field_value)
                             continue
                     # GitLab issues expect YYYY-MM-DD for due_date, strip time if present
                     if field_name.lower() == "due_date" and field_value:
@@ -662,12 +663,13 @@ class Outbound(BaseOutbound):
                 "synced_fields": sync_fields
             }
             web_url = ticket.get('web_url') or ''
-            xref_id = str(ticket['id'])
+            # Epics return work_item_id (matches webhook object_attributes.id); issues don't have it.
+            xref_id = str(ticket.get('work_item_id') or ticket['id'])
             as_log.info("gitlab/Outbound.create - ticket id=[{}] work_item_id=[{}] using xref_id=[{}]".format(
                 ticket.get('id'), ticket.get('work_item_id'), xref_id))
             xref_object = {
                 "relative_url": "/".join(web_url.split("/")[3:]) if web_url else web_url,
-                'id': str(ticket['work_item_id']),
+                'id': xref_id,
                 # For epics, GitLab 15.9+ returns work_item_iid alongside iid.
                 # Work Items Notes API uses work_item_iid; fall back to iid if not present.
                 'display_id': str(ticket.get('work_item_iid') or ticket['iid']),
@@ -690,6 +692,25 @@ class Outbound(BaseOutbound):
         except Exception as e:
             error_msg = ('Unable to sync fields in Gitlab. Error is [{}]. Trying to sync fields \n'
                          '[{} {}]\n.'.format(e, " ", sync_fields))
+            raise as_exceptions.OutboundError(error_msg, stack_trace=True)
+
+    def delete(self):
+        try:
+            transformer_functions.delete_issue(
+                self.instance_object,
+                id=self.project_info["project"],
+                name=self.project_info["display_name"],
+                workid=self.workitem_display_id
+            )
+        except Exception as e:
+            resp = getattr(self.instance_object, '_response_obj', None)
+            status = getattr(resp, 'status_code', None)
+            # 204 = deleted successfully (GitLab returns empty body, no JSON to decode)
+            # 404 = already deleted; treat as idempotent success
+            if status in (204, 404):
+                return
+            error_msg = 'Unable to delete workitem [{}] in Gitlab. Error is [{}].'.format(
+                self.workitem_display_id, str(e))
             raise as_exceptions.OutboundError(error_msg, stack_trace=True)
 
     def create_remote_link(self, workitem_id, url, id_field=None, url_field=None):

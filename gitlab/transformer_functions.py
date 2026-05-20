@@ -339,6 +339,25 @@ def update_tickets(instance, payload, id, name, parentid=None, workid=None):
         return response
 
 
+def delete_issue(instance, id, name, workid):
+    orgsplit = id.split('/')
+
+    if name == "No Project":
+        path = "{}/{}/{}/{}".format(
+            "groups",
+            orgsplit[0],
+            "epics", workid
+        )
+    else:
+        path = "{}/{}/{}/{}".format(
+            "projects",
+            orgsplit[0],
+            "issues", workid
+        )
+
+    return instance.delete(path)
+
+
 def ticket_fields(instance, id=None, payload=None):
     tickets = [
         {
