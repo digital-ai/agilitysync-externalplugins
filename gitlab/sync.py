@@ -25,11 +25,13 @@ from agilitysync.lib.plugin_manage import plugin_schema
 from agilitysync.external_lib.restapi import ASyncRestApi
 from bson import ObjectId
 
+API_URL = "https://gitlab.com"
+
 class AttachmentUpload(BaseAttachmentUpload):
 
     def fetch_url(self):
         
-         return "{}/{}".format("'https://gitlab.com",self.private_data["url"])
+        return "{}/{}".format(API_URL,self.private_data["url"])
 
     def fetch_upload_url(self):
         api_url = transformer_functions.get_api_url(self.instance_details["url"])
@@ -66,9 +68,7 @@ class AttachmentUpload(BaseAttachmentUpload):
         self.instance_object.post("{}/{}".format(transformer_functions.ATTACHMENT_CREATE_ENDPOINT,
                                                  attachment_id.split(":")[1]),
                                   {'id': attachment_id}, query_str="op=Delete")
-class AttachmentDownload(BaseAttachmentDownload):
-    def basic_auth(self):
-        return None
+
 
 class Payload(BasePayload):
 
