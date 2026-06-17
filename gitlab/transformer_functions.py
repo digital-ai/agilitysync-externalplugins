@@ -130,18 +130,18 @@ fields_epic = [
         "required": False,
         "disabled field": False,
         "customfield": False,
-        "raw_title": "start_date_fixed",
-        "title": "start_date_fixed",
-        "type": "start_date_fixed",
+        "raw_title": "start_date",
+        "title": "start_date",
+        "type": "start_date",
         "IsMultivalue": False
     },
     {
         "required": False,
         "disabled field": False,
         "customfield": False,
-        "raw_title": "due_date_fixed",
-        "title": "due_date_fixed",
-        "type": "due_date_fixed",
+        "raw_title": "due_date",
+        "title": "due_date",
+        "type": "due_date",
         "IsMultivalue": False
     },
     {
@@ -172,31 +172,42 @@ def get_issue(instance, proj_id, workid):
     return instance.get(path)
 
 
+def get_epic(instance, proj_id, workid):
+    group_id = str(proj_id["project"]).split("/")[0]
+    path = "{}/{}/{}/{}".format("groups", group_id, "epics", workid)
+    return instance.get(path)
+
+
 def epicfields():
     return fields_epic
 
 
+def get_api_url(url):
+    base_url = str(url).rstrip("/")
+    if base_url.endswith("/api/v4"):
+        return base_url
+    return "{}/api/v4".format(base_url)
+
+
 def connect(instance_details):
-    return ASyncRestApi(instance_details['url'], headers={
-        "authorization": "Bearer {}".format(instance_details["token"]),
+    if not instance_details.get('url'):
+        raise ValueError("GitLab URL is required. Please provide the domain URL in the instance configuration.")
+    return ASyncRestApi(get_api_url(instance_details['url']), headers={
+        "PRIVATE-TOKEN": "{}".format(instance_details["token"]),
         "Accept": "application/json",
         "Content-Type": "application/json"
     })
 
 
 def check_connection(instance, instance_details):
-    path = "{}".format(
-        DEFAULT.INITIAL_PATH,
-        instance_details["Username"]
-
-    )
+    path = "{}".format(DEFAULT.INITIAL_PATH)
 
     response = instance.get(path)
 
-    if instance_details["Username"] == response["username"]:
+    if response.get("username"):
         return "Connection to Gitlab server is successfull."
     else:
-        return response["error"]
+        raise Exception("GitLab API did not return a valid user. Please verify your token.")
 
 
 def get_org(instance):
@@ -328,6 +339,25 @@ def update_tickets(instance, payload, id, name, parentid=None, workid=None):
         return response
 
 
+def delete_issue(instance, id, name, workid):
+    orgsplit = id.split('/')
+
+    if name == "No Project":
+        path = "{}/{}/{}/{}".format(
+            "groups",
+            orgsplit[0],
+            "epics", workid
+        )
+    else:
+        path = "{}/{}/{}/{}".format(
+            "projects",
+            orgsplit[0],
+            "issues", workid
+        )
+
+    return instance.delete(path)
+
+
 def ticket_fields(instance, id=None, payload=None):
     tickets = [
         {
@@ -365,6 +395,21 @@ def webhooks(instance, id, payload=None):
         return response
 
 
+def group_webhooks(instance, id, payload=None):
+    instance_path = "hooks"
+    path = "{}/{}/{}".format(
+        "groups",
+        id,
+        instance_path)
+
+    if payload:
+        response = instance.post(path, payload)
+        return response
+    else:
+        response = instance.get(path)
+        return response
+
+
 def get_fields_values(instance, field):
     path = "{}/{}"
 
@@ -382,8 +427,8 @@ def get_parent_id(proj_id, iid, instance):
     try:
         response = instance.get(path)
         return response
-    except:
-        return response["error"]
+    except Exception:
+        return None
 
 
 def multivalue_fetch(instance, proj_id, field):
@@ -474,9 +519,17 @@ def get_assignee(instance, proj_id,work_id):
 
     return vals
 
-def comment(instance,proj_id,payload,workid):
+def comment(instance, proj_id, payload, workid):
+    project_val = str(proj_id["project"])
 
-    path ="{}/{}/{}/{}/{}".format("projects",proj_id["project"],"issues",workid,"notes")
+    if proj_id.get("display_name") == "No Project" or project_val.endswith("/No Project"):
+        # Epic: use Work Items Notes API (available on all tiers).
+        # The Epics Notes API (/groups/:id/epics/:iid/notes) is GitLab Premium only.
+        group_id = project_val.split("/")[0]
+        path = "{}/{}/{}/{}/{}".format("groups", group_id, "epics", workid, "notes")
+    else:
+        # Issue: POST /projects/<project_id>/issues/<iid>/notes
+        path = "{}/{}/{}/{}/{}".format("projects", project_val, "issues", workid, "notes")
 
-    return instance.post(path,payload)
+    return instance.post(path, payload)
 
