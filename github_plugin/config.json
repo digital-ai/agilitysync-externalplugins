@@ -32,38 +32,45 @@
             "type": "input"
         },
         {
+            "title": "Organization",
+            "name": "organization",
+            "description": "GitHub organization login, for example: octocat",
+            "type": "input",
+            "required": true
+        },
+        {
             "title": "Description",
             "name": "description",
             "type": "input"
         }
     ],
     "assets_properties": [
-        
+
         {
             "type":"custom",
-            "title":"organization",
-            "name":"organization",
-            "description":"To get the organization",
-            "api":"fetch_org"
+            "title":"GitHub Project",
+            "name":"github_project",
+            "description":"Select a GitHub Project (v2), or No Project for a repository-only mapping",
+            "api":"fetch_github_projects"
         },
-        
+
         {
             "type": "project",
-            "title": " Projects",
+            "title": "Repositories",
             "name": "projects",
-            "description": "To get the projects",
+            "description": "To get the repositories",
             "is_render_treeview": true,
             "max_projects": 10,
             "is_fields_at_project_level": true,
-            "dependent_assets": ["organization"]
+            "dependent_assets": ["github_project"]
         },
-       
+
         {
             "type": "asset", 
             "name": "issuetype_name",
             "title": "Issue Types",
-            "description": "To get the assets",
-            "dependent_assets": ["projects","organization"]
+            "description": "To get the issue types",
+            "dependent_assets": ["projects","github_project"]
         }
     ],
     "additional_mapping": {
@@ -85,6 +92,25 @@
         },
         "data_migration": {
             "enabled": true
+        },
+        "conflict_resolution": {
+            "enabled": true
+        },
+        "sync_selected_event_type": {
+            "enabled": true
+        },
+        "search_before_create": {
+            "enabled": true,
+            "search_query": [
+                {
+                    "field_types": ["text"],
+                    "conditions": {
+                        "equal": "="
+                    }
+                }
+            ],
+            "and_operator": " ",
+            "or_operator": " OR "
         }
     }
 }
