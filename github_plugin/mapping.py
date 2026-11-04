@@ -27,7 +27,7 @@ class Field(BaseField):
         return False
 
     def is_custom_field(self):
-        return True if "custom_field_options" in self.field_attr else False
+        return True if "custom_field_options" in self.field_attr or self.field_attr.get("customfield") else False
 
     def is_readonly_field(self):
         return False
@@ -56,51 +56,18 @@ class Field(BaseField):
         return field_type_doc  
 
     def fetch_fieldtype_info(self):
-        fields_type = {
-            "TEXT": "text",
-            "TEXTAREA": "textarea",
-            "CHECKBOX": "checkbox",
-            "DATE": "date",
-            "INTEGER": "integer",
-            "DECIMAL": "decimal",
-            "REGEXP": "regexp",
-            "PARTIALCREDITCARD": "partialcreditcard",
-            "MULTISELECT": "multiselect",
-            "TAGGER": "tagger",
-            "LOOKUP": "lookup",
-            "RELATION": "Relation"
-        }
-        fields = {
-            "title": {
-                "type": fields_type["TEXT"],
-                "system": "title"
-            }, 
-            
-            "assignee": {
-                "type": fields_type["TEXT"],
-                "system": "assignee"
-            },
-            "labels": {
-                "type": fields_type["TEXT"],
-                "system": "labels"
-            },
-            "milestone": {
-                "type": fields_type["RELATION"],
-                "system": "milestone"
-            }
-        }
-        
-        
-        
-        attribute_type = fields[self.field_attr['type']]['type'].capitalize()
+        field_type = self.field_attr["type"]
 
-        if attribute_type == "Text":
-            return self._field_type_info(FieldTypes.TEXT,  FieldDisplayIcon.TEXT)
-        elif attribute_type == "Relation":
-            list =transformer_functions.get_field_value(self.instance_obj,details=self.instance_details,repo=self.fields_obj.project_info['display_name'],org = self.fields_obj.project_info['project'] )
-            value_list = []
-            for values in list:
-                 value_list.append({"id": values["id"], "value": values["title"], "display_value": values["title"]})
+        if field_type.startswith("projectfield:"):
+            return self._fetch_project_fieldtype_info()
+
+        if field_type == "milestone":
+            org = self.fields_obj.instance_details["organization"]
+            repo = self.fields_obj.project_info["display_name"]
+            milestones = transformer_functions.get_field_value(
+                self.instance_obj, details=self.instance_details, repo=repo, org=org)
+            value_list = [{"id": milestone["id"], "value": milestone["title"], "display_value": milestone["title"]}
+                         for milestone in milestones]
             return self._field_type_info(
                 FieldTypes.LIST,
                 FieldDisplayIcon.DROPDOWN,
@@ -108,28 +75,96 @@ class Field(BaseField):
                 FieldTypes.TEXT
             )
 
+        # title / assignee / labels are all simple text fields.
+        return self._field_type_info(FieldTypes.TEXT, FieldDisplayIcon.TEXT)
+
+    def _fetch_project_fieldtype_info(self):
+        # GitHub's Projects v2 REST API returns `data_type` as lowercase snake_case
+        # (e.g. "single_select", "date", "number"), not camelCase/UPPERCASE.
+        data_type = self.field_attr.get("data_type", "text")
+
+        if data_type == "single_select":
+            options = self.field_attr.get("options", [])
+            value_list = [{"id": option["id"], "value": option["name"]["raw"], "display_value": option["name"]["raw"]}
+                         for option in options]
+            return self._field_type_info(
+                FieldTypes.LIST,
+                FieldDisplayIcon.DROPDOWN,
+                value_list,
+                FieldTypes.TEXT
+            )
+        elif data_type == "iteration":
+            # Iteration field options are unconfirmed against a live delivery; best effort only.
+            iterations = self.field_attr.get("iterations", [])
+            value_list = [{"id": iteration["id"], "value": iteration.get("title", iteration["id"]),
+                          "display_value": iteration.get("title", iteration["id"])} for iteration in iterations]
+            return self._field_type_info(
+                FieldTypes.LIST,
+                FieldDisplayIcon.DROPDOWN,
+                value_list,
+                FieldTypes.TEXT
+            )
+        elif data_type == "date":
+            return self._field_type_info(FieldTypes.DATE, FieldDisplayIcon.DATE)
+        elif data_type == "number":
+            return self._field_type_info(FieldTypes.NUMERIC, FieldDisplayIcon.NUMERIC)
+
+        return self._field_type_info(FieldTypes.TEXT, FieldDisplayIcon.TEXT)
+
+
 class Fields(BaseFields):
 
     def fetch_fields(self):
-        fields = transformer_functions.ticfields(self.instance_obj)
-        return fields
+        field_list = list(transformer_functions.fields)
+
+        github_project = self.query_params.get("github_project", {})
+        if github_project.get("id") not in (None, DEFAULT.NO_PROJECT_ID):
+            org = self.instance_details["organization"]
+            project_number = github_project["id"]
+            for project_field in transformer_functions.get_project_fields(self.instance_obj, org, project_number):
+                # Skip built-in/structural fields already covered elsewhere (Title, Assignees, Labels,
+                # Milestone, Repository, Type, Reviewers, Parent issue, etc). `data_type` values are
+                # lowercase snake_case as returned by GitHub's Projects v2 REST API.
+                if project_field.get("data_type") not in ("text", "number", "date", "single_select", "iteration"):
+                    continue
+                field_list.append({
+                    "required": False,
+                    "disabled field": False,
+                    "customfield": True,
+                    "raw_title": "projectfield:{}".format(project_field["id"]),
+                    "title": project_field["name"],
+                    "type": "projectfield:{}".format(project_field["id"]),
+                    "IsMultivalue": False,
+                    "data_type": project_field.get("data_type", "text"),
+                    "options": project_field.get("options", []),
+                    "iterations": project_field.get("configuration", {}).get("iterations", [])
+                })
+
+        return field_list
 
 
 class AssetsManage(BaseAssetsManage):
-    
-    def fetch_org(self):
-        response_orgs= transformer_functions.get_org(self.instance_obj)
-        orgs = []
-        for org in response_orgs:
-            orgs.append(
+
+    def fetch_github_projects(self):
+        org = self.instance_details["organization"]
+
+        projects = [
+            {
+                "id": DEFAULT.NO_PROJECT_ID,
+                "display_name": DEFAULT.NO_PROJECT_DISPLAY_NAME
+            }
+        ]
+
+        for project in transformer_functions.get_projects_v2(self.instance_obj, org):
+            projects.append(
                 {
-                    "id": org["id"],
-                    "organization": org["login"],
-                    "display_name": org["login"],
+                    "id": str(project["number"]),
+                    "display_name": project["title"]
                 }
             )
-        return orgs
-    
+
+        return projects
+
     def connect(self):
         return transformer_functions.connect(
             self.instance_details
@@ -140,7 +175,7 @@ class AssetsManage(BaseAssetsManage):
         return user
     
     def fetch_projects(self):
-        org = self.query_params["organization"]["display_name"]
+        org = self.instance_details["organization"]
         response_repos= transformer_functions.get_repos(self.instance_obj,org)
         projects = [ ]
         for project in response_repos:
@@ -155,16 +190,19 @@ class AssetsManage(BaseAssetsManage):
         return projects
     
     def fetch_assets(self):
-        org = self.query_params
-        asset_types = [org]
-        for field in transformer_functions.ticket_fields(self.instance_obj):
-            
-                    asset_types.append(
-                        {
-                            "id": field["id"],
-                            "asset": field["id"],
-                            "display_name": field["display_name"],
-                        })
+        github_project = self.query_params.get("github_project", {})
+        asset_types = [dict(DEFAULT.DEFAULT_ISSUE_TYPE)]
+
+        if github_project.get("id") not in (None, DEFAULT.NO_PROJECT_ID):
+            org = self.instance_details["organization"]
+            for issue_type in transformer_functions.get_issue_types(self.instance_obj, org):
+                asset_types.append(
+                    {
+                        "id": str(issue_type["id"]),
+                        "asset": issue_type["name"],
+                        "display_name": issue_type["name"],
+                    })
+
         return asset_types
     
     def test_connection(self):
@@ -174,24 +212,128 @@ class AssetsManage(BaseAssetsManage):
             raise as_exceptions.SanitizedPluginError("Unknown error connecting to GIthub Plugin integration system.", str(ex))
 
 class WebHook(BaseWebHook):
-    
-    def create_webhook(self, webhook_name, webhook_url,webhook_description,project_id):
-       
-        payload = {
 
-                        "name": "web",
-                        "active": True,
-                         "events": [
-                                        "issues"
-                                    ],
-                        "config": {
-                                        "url": webhook_url,
-                                        "content_type": "json",
-                                        "insecure_ssl": "0" 
-                        }
-                        
-                }  # Payload data to create single webhook
-       
-        for project in self.projects_info:
-            transformer_functions.webhooks(self.instance_obj,repo = project['display_name'],id = project['project']
-                                                      ,payload=payload)  
+    def create_webhook(self, webhook_name, webhook_url, webhook_description, project_id=None):
+        project_info = self.__find_project_info(project_id)
+        org = self.instance_details["organization"]
+        github_project = self.custom_assets_info.get("github_project", {})
+
+        if github_project.get("id") in (None, DEFAULT.NO_PROJECT_ID):
+            self.__create_repo_webhook(org, project_info, webhook_url)
+        else:
+            self.__create_or_reuse_org_webhook(org, webhook_url)
+
+    def update_webhook(self, webhook_url, project_id=None) -> None:
+        project_info = self.__find_project_info(project_id)
+        github_project = self.custom_assets_info.get("github_project", {})
+
+        if github_project.get("id") in (None, DEFAULT.NO_PROJECT_ID):
+            self.__update_repo_webhook(project_info, webhook_url)
+        else:
+            self.__update_org_webhook(webhook_url)
+
+    def __find_project_info(self, project_id):
+        for project_info in self.projects_info:
+            if project_info["id"] == project_id:
+                return project_info
+
+        raise ValueError("Unable to find project info for project id [{}]".format(project_id))
+
+    def __create_repo_webhook(self, org, project_info, webhook_url):
+        required_events = self.__repo_events()
+        existing_hooks = transformer_functions.webhooks(self.instance_obj, repo=project_info["display_name"],
+                                                        id=project_info["project"])
+        for hook in existing_hooks:
+            if hook.get("config", {}).get("url") == webhook_url:
+                self.__ensure_repo_webhook_events(org, project_info, hook, required_events)
+                return
+
+        payload = {
+            "name": "web",
+            "active": True,
+            "events": required_events,
+            "config": {
+                "url": webhook_url,
+                "content_type": "json",
+                "insecure_ssl": "0"
+            }
+        }
+
+        transformer_functions.webhooks(self.instance_obj, repo=project_info["display_name"],
+                                      id=project_info["project"], payload=payload)
+
+    def __create_or_reuse_org_webhook(self, org, webhook_url):
+        required_events = self.__org_events()
+        existing_hooks = transformer_functions.org_webhooks(self.instance_obj, org)
+        for hook in existing_hooks:
+            if hook.get("config", {}).get("url") == webhook_url:
+                # Already created, either for another repository in this same mapping or by a
+                # different mapping sharing the same organization webhook.
+                self.__ensure_org_webhook_events(org, hook, required_events)
+                return
+
+        payload = {
+            "name": "web",
+            "active": True,
+            "events": required_events,
+            "config": {
+                "url": webhook_url,
+                "content_type": "json",
+                "insecure_ssl": "0"
+            }
+        }
+
+        transformer_functions.org_webhooks(self.instance_obj, org, payload=payload)
+
+    def __update_repo_webhook(self, project_info, webhook_url):
+        org = project_info["project"].split('/')[0]
+        required_events = self.__repo_events()
+        existing_hooks = transformer_functions.webhooks(self.instance_obj, repo=project_info["display_name"],
+                                                        id=project_info["project"])
+        for hook in existing_hooks:
+            if hook.get("config", {}).get("url") == webhook_url:
+                self.__ensure_repo_webhook_events(org, project_info, hook, required_events)
+                return
+
+    def __update_org_webhook(self, webhook_url):
+        org = self.instance_details["organization"]
+        required_events = self.__org_events()
+        existing_hooks = transformer_functions.org_webhooks(self.instance_obj, org)
+        for hook in existing_hooks:
+            if hook.get("config", {}).get("url") == webhook_url:
+                self.__ensure_org_webhook_events(org, hook, required_events)
+                return
+
+    def __repo_events(self):
+        events = list(DEFAULT.ISSUES_WEBHOOK_EVENTS)
+        if self.comments_enabled:
+            events.append(DEFAULT.COMMENT_WEBHOOK_EVENT)
+        return events
+
+    def __org_events(self):
+        events = list(DEFAULT.PROJECT_WEBHOOK_EVENTS)
+        if self.comments_enabled:
+            events.append(DEFAULT.COMMENT_WEBHOOK_EVENT)
+        return events
+
+    def __ensure_repo_webhook_events(self, org, project_info, hook, required_events):
+        # Additive only: another mapping may target the same repository and rely on a subscription
+        # (or the "*" wildcard) this mapping doesn't need, so existing events are never removed.
+        existing_events = set(hook.get("events", []))
+        if "*" in existing_events or existing_events.issuperset(required_events):
+            return
+
+        transformer_functions.update_repo_webhook_events(
+            self.instance_obj, org, project_info["display_name"], hook["id"],
+            list(existing_events | set(required_events)))
+
+    def __ensure_org_webhook_events(self, org, hook, required_events):
+        # Additive only: this org-level hook can be shared across mappings, so existing events
+        # (and the "*" wildcard, if present) are never removed, only added to.
+        existing_events = set(hook.get("events", []))
+        if "*" in existing_events or existing_events.issuperset(required_events):
+            return
+
+        transformer_functions.update_org_webhook_events(
+            self.instance_obj, org, hook["id"], list(existing_events | set(required_events)))
+
