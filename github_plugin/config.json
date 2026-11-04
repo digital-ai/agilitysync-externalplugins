@@ -90,9 +90,6 @@
         "missing_events": {
             "enabled": true
         },
-        "data_migration": {
-            "enabled": true
-        },
         "conflict_resolution": {
             "enabled": true
         },

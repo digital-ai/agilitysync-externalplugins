@@ -1,5 +1,6 @@
 from agilitysync.sync import (
     as_exceptions,
+    as_log,
     BaseInbound,
     BaseOutbound,
     BasePayload,
@@ -11,12 +12,31 @@ from agilitysync.sync import (
 )
 from datetime import datetime
 from dateutil import parser
+import itertools
 import re
 import time
 import json
 from external_plugins.github_plugin import transformer_functions
 import external_plugins.github_plugin.default as DEFAULT
-from common.lib.rocklogger import logger
+
+
+def _broaden_asset_match(node, asset, default_asset):
+    # Walks the Mongo query produced by BasePayload.fetch_query, replacing exact-match conditions
+    # on "...asset_info.asset" == asset with an $in on [asset, default_asset] in place, so a
+    # No-Project mapping (which only ever offers the synthetic default asset) still matches.
+    if isinstance(node, dict):
+        for key, value in list(node.items()):
+            if key.endswith("asset_info.asset") and value == asset:
+                node[key] = {"$in": [asset, default_asset]}
+            elif (key == "$eq" and isinstance(value, list) and len(value) == 2 and
+                  isinstance(value[0], str) and value[0].endswith("asset_info.asset") and value[1] == asset):
+                del node["$eq"]
+                node["$in"] = [value[0], [asset, default_asset]]
+            else:
+                _broaden_asset_match(value, asset, default_asset)
+    elif isinstance(node, list):
+        for item in node:
+            _broaden_asset_match(item, asset, default_asset)
 
 
 class Payload(BasePayload):
@@ -41,6 +61,15 @@ class Payload(BasePayload):
 
         issue_type = issue.get("type")
         return issue_type["name"] if issue_type else DEFAULT.DEFAULT_ISSUE_TYPE["asset"]
+
+    def fetch_query(self, event, project, asset):
+        # A No-Project (repository-only) mapping only ever offers the synthetic default asset (see
+        # AssetsManage.fetch_assets), so a typed issue must still be able to match it.
+        query = super().fetch_query(event, project, asset)
+        default_asset = DEFAULT.DEFAULT_ISSUE_TYPE["asset"]
+        if asset != default_asset:
+            _broaden_asset_match(query, asset, default_asset)
+        return query
 
     def is_cyclic_event(self, event, sync_user):
         return bool(event['sender']['login'] == str(sync_user))
@@ -92,7 +121,9 @@ class Event(BaseEvent):
         return self.__fetch_issue()['id']
 
     def fetch_workitem_display_id(self):
-        return self.__fetch_issue()['id']
+        # The issue number (not the global id) is what's usable in GitHub's REST paths, and is
+        # what outbound-created issues already store as their display id (see Outbound.create).
+        return self.__fetch_issue()['number']
 
     def fetch_workitem_url(self):
         return "/".join(self.__fetch_issue()['url'].split("/")[1:])
@@ -180,8 +211,10 @@ class Outbound(BaseOutbound):
                     create_fields[outbound_field.name.lower()].append(val[1])
             else:
                 create_fields[outbound_field.name.lower()] =outbound_field.value 
-                    
-        create_fields["type"] = self.asset_info["asset"]
+
+        # The synthetic default asset has no corresponding organization issue type to set.
+        if self.asset_info.get("id") != DEFAULT.DEFAULT_ISSUE_TYPE["id"]:
+            create_fields["type"] = self.asset_info["asset"]
         return create_fields
 
     def create(self, sync_fields):
@@ -230,7 +263,7 @@ class Outbound(BaseOutbound):
                 {"content_id": ticket["id"], "content_type": "Issue"}
             )
         except Exception as ex:
-            logger.warn("Unable to add the created issue to GitHub Project [{}]. The error is [{}].".format(
+            as_log.warn("Unable to add the created issue to GitHub Project [{}]. The error is [{}].".format(
                 github_project.get("display_name"), str(ex)))
 
     def __fetch_issue_number(self):
@@ -264,7 +297,7 @@ class Outbound(BaseOutbound):
             if parent_number:
                 transformer_functions.add_sub_issue(self.instance_object, org, repo, parent_number, child_issue_id)
         except Exception as ex:
-            logger.warn("Unable to sync parent/sub-issue relationship for issue [{}]. The error is [{}].".format(
+            as_log.warn("Unable to sync parent/sub-issue relationship for issue [{}]. The error is [{}].".format(
                 child_issue_id, str(ex)))
 
     def update(self, sync_fields):
@@ -294,34 +327,41 @@ class Outbound(BaseOutbound):
 
     def search_before_create(self, search_query):
         # Only called for Data Migration create events. search_query is built from config.json's
-        # search_query rules as "field='value'" pairs, AND-joined - GitHub's search API has no OR
-        # support across qualifiers, so only simple AND conditions are handled here.
-        conditions = [(name, value) for name, value in re.findall(r"(\w+)\s*[=~]\s*'([^']*)'", search_query) if value]
-        if not conditions:
-            return None
+        # search_query rules: bare "field='value'" conditions are AND'd (and_operator is a plain
+        # space), while a "(cond OR cond ...)" group is an OR alternative (or_operator is " OR ").
+        # GitHub's search API has no OR support across qualifiers, so each OR alternative is run as
+        # its own AND-only search and the results are merged, preserving the configured semantics.
+        or_groups = [group for group in (
+            self.__parse_conditions(raw_group) for raw_group in re.findall(r"\(([^)]*)\)", search_query)) if group]
+        and_conditions = self.__parse_conditions(re.sub(r"\([^)]*\)", "", search_query))
 
-        qualifiers = ' '.join(
-            'in:title "{}"'.format(value) if name == "title" else '{}:"{}"'.format(name, value)
-            for name, value in conditions)
+        if not and_conditions and not or_groups:
+            return None
 
         org = self.project_info["project"].split('/')[0]
         repo = self.project_info["display_name"]
 
-        try:
-            results = transformer_functions.search_issues(self.instance_object, org, repo, qualifiers)
-        except Exception as e:
-            raise as_exceptions.OutboundError(
-                "Unable to search for an existing issue in Github. Error is [{}].".format(e), stack_trace=True)
+        matches = {}
+        for or_combination in itertools.product(*or_groups):
+            qualifiers = self.__build_qualifiers(and_conditions + list(or_combination))
 
-        items = results.get("items", [])
-        if not items:
+            try:
+                results = transformer_functions.search_issues(self.instance_object, org, repo, qualifiers)
+            except Exception as e:
+                raise as_exceptions.OutboundError(
+                    "Unable to search for an existing issue in Github. Error is [{}].".format(e), stack_trace=True)
+
+            for issue in results.get("items", []):
+                matches[issue["id"]] = issue
+
+        if not matches:
             return None
-        if len(items) > 1:
+        if len(matches) > 1:
             raise as_exceptions.OutboundError(
                 "Multiple matching Github issues found while searching before create. Query was [{}].".format(
-                    qualifiers))
+                    search_query))
 
-        issue = items[0]
+        issue = next(iter(matches.values()))
         return {
             "relative_url": "{}/{}/{}/{}/{}".format("repos", org, repo, "issues", issue["number"]),
             "id": str(issue["id"]),
@@ -329,3 +369,13 @@ class Outbound(BaseOutbound):
             "sync_info": {},
             "absolute_url": issue["html_url"],
         }
+
+    @staticmethod
+    def __parse_conditions(segment):
+        return [(name, value) for name, value in re.findall(r"(\w+)\s*[=~]\s*'([^']*)'", segment) if value]
+
+    @staticmethod
+    def __build_qualifiers(conditions):
+        return ' '.join(
+            'in:title "{}"'.format(value) if name == "title" else '{}:"{}"'.format(name, value)
+            for name, value in conditions)

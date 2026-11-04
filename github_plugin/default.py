@@ -10,9 +10,10 @@ NO_PROJECT_DISPLAY_NAME = "No Project"
 
 # Synthetic issue type that is always available, used both when no real Project is selected and
 # prepended to the real issue-type list fetched from GitHub when a Project is selected.
+# The id/asset values are also the routing key persisted in existing mappings - keep them stable.
 DEFAULT_ISSUE_TYPE = {
-    "id": "issue",
-    "asset": "Issue",
+    "id": "Assettype-001",
+    "asset": "Assettype-001",
     "display_name": "Issue"
 }
 

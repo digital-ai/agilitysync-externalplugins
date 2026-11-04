@@ -13,8 +13,6 @@ from external_plugins.github_plugin import transformer_functions
 import external_plugins.github_plugin.default as DEFAULT
 
 from agilitysync.external_lib.restapi import ASyncRestApi
-from common.lib.catocommon import catocommon
-from common.lib.rocklogger import logger
 
 class Field(BaseField):
     
@@ -218,7 +216,7 @@ class WebHook(BaseWebHook):
     def create_webhook(self, webhook_name, webhook_url, webhook_description, project_id=None):
         project_info = self.__find_project_info(project_id)
         org = self.instance_details["organization"]
-        github_project = self.__fetch_github_project_selection(project_id)
+        github_project = self.custom_assets_info.get("github_project", {})
 
         if github_project.get("id") in (None, DEFAULT.NO_PROJECT_ID):
             self.__create_repo_webhook(org, project_info, webhook_url)
@@ -227,7 +225,7 @@ class WebHook(BaseWebHook):
 
     def update_webhook(self, webhook_url, project_id=None) -> None:
         project_info = self.__find_project_info(project_id)
-        github_project = self.__fetch_github_project_selection(project_id)
+        github_project = self.custom_assets_info.get("github_project", {})
 
         if github_project.get("id") in (None, DEFAULT.NO_PROJECT_ID):
             self.__update_repo_webhook(project_info, webhook_url)
@@ -241,39 +239,19 @@ class WebHook(BaseWebHook):
 
         raise ValueError("Unable to find project info for project id [{}]".format(project_id))
 
-    def __fetch_github_project_selection(self, project_id):
-        # The base WebHook contract only threads `project_info`/`asset_info` through to this class,
-        # so the GitHub Project (v2) selection - a custom asset persisted alongside them - is read
-        # back directly from the `fields` collection it was written to during field mapping.
-        try:
-            db = catocommon.new_mongo_conn()
-            doc = db.fields.find_one(
-                {
-                    "instance_id": self.instance_details["_id"],
-                    "plugin_data.config.project_info.id": project_id
-                },
-                sort=[("_id", -1)]
-            )
-
-            if doc:
-                for config_entry in doc["plugin_data"]["config"]:
-                    if config_entry["project_info"]["id"] == project_id:
-                        return config_entry.get("github_project", {})
-        except Exception as ex:
-            logger.warn("Unable to determine the selected GitHub Project for webhook scope, defaulting to "
-                       "repository webhook. The error is [{}].".format(str(ex)))
-
-        return {}
-
     def __create_repo_webhook(self, org, project_info, webhook_url):
-        events = list(DEFAULT.ISSUES_WEBHOOK_EVENTS)
-        if self.comments_enabled:
-            events.append(DEFAULT.COMMENT_WEBHOOK_EVENT)
+        required_events = self.__repo_events()
+        existing_hooks = transformer_functions.webhooks(self.instance_obj, repo=project_info["display_name"],
+                                                        id=project_info["project"])
+        for hook in existing_hooks:
+            if hook.get("config", {}).get("url") == webhook_url:
+                self.__ensure_repo_webhook_events(org, project_info, hook, required_events)
+                return
 
         payload = {
             "name": "web",
             "active": True,
-            "events": events,
+            "events": required_events,
             "config": {
                 "url": webhook_url,
                 "content_type": "json",
@@ -281,31 +259,23 @@ class WebHook(BaseWebHook):
             }
         }
 
-        existing_hooks = transformer_functions.webhooks(self.instance_obj, repo=project_info["display_name"],
-                                                        id=project_info["project"])
-        for hook in existing_hooks:
-            if hook.get("config", {}).get("url") == webhook_url:
-                return
-
         transformer_functions.webhooks(self.instance_obj, repo=project_info["display_name"],
                                       id=project_info["project"], payload=payload)
 
     def __create_or_reuse_org_webhook(self, org, webhook_url):
+        required_events = self.__org_events()
         existing_hooks = transformer_functions.org_webhooks(self.instance_obj, org)
         for hook in existing_hooks:
             if hook.get("config", {}).get("url") == webhook_url:
                 # Already created, either for another repository in this same mapping or by a
-                # different mapping sharing the same organization webhook - nothing more to do.
+                # different mapping sharing the same organization webhook.
+                self.__ensure_org_webhook_events(org, hook, required_events)
                 return
-
-        events = list(DEFAULT.PROJECT_WEBHOOK_EVENTS)
-        if self.comments_enabled:
-            events.append(DEFAULT.COMMENT_WEBHOOK_EVENT)
 
         payload = {
             "name": "web",
             "active": True,
-            "events": events,
+            "events": required_events,
             "config": {
                 "url": webhook_url,
                 "content_type": "json",
@@ -316,28 +286,54 @@ class WebHook(BaseWebHook):
         transformer_functions.org_webhooks(self.instance_obj, org, payload=payload)
 
     def __update_repo_webhook(self, project_info, webhook_url):
-        events = list(DEFAULT.ISSUES_WEBHOOK_EVENTS)
-        if self.comments_enabled:
-            events.append(DEFAULT.COMMENT_WEBHOOK_EVENT)
-
         org = project_info["project"].split('/')[0]
+        required_events = self.__repo_events()
         existing_hooks = transformer_functions.webhooks(self.instance_obj, repo=project_info["display_name"],
                                                         id=project_info["project"])
         for hook in existing_hooks:
-            if hook.get("config", {}).get("url") == webhook_url and set(hook.get("events", [])) != set(events):
-                transformer_functions.update_repo_webhook_events(
-                    self.instance_obj, org, project_info["display_name"], hook["id"], events)
+            if hook.get("config", {}).get("url") == webhook_url:
+                self.__ensure_repo_webhook_events(org, project_info, hook, required_events)
                 return
 
     def __update_org_webhook(self, webhook_url):
         org = self.instance_details["organization"]
+        required_events = self.__org_events()
+        existing_hooks = transformer_functions.org_webhooks(self.instance_obj, org)
+        for hook in existing_hooks:
+            if hook.get("config", {}).get("url") == webhook_url:
+                self.__ensure_org_webhook_events(org, hook, required_events)
+                return
+
+    def __repo_events(self):
+        events = list(DEFAULT.ISSUES_WEBHOOK_EVENTS)
+        if self.comments_enabled:
+            events.append(DEFAULT.COMMENT_WEBHOOK_EVENT)
+        return events
+
+    def __org_events(self):
         events = list(DEFAULT.PROJECT_WEBHOOK_EVENTS)
         if self.comments_enabled:
             events.append(DEFAULT.COMMENT_WEBHOOK_EVENT)
+        return events
 
-        existing_hooks = transformer_functions.org_webhooks(self.instance_obj, org)
-        for hook in existing_hooks:
-            if hook.get("config", {}).get("url") == webhook_url and set(hook.get("events", [])) != set(events):
-                transformer_functions.update_org_webhook_events(self.instance_obj, org, hook["id"], events)
-                return
+    def __ensure_repo_webhook_events(self, org, project_info, hook, required_events):
+        # Additive only: another mapping may target the same repository and rely on a subscription
+        # (or the "*" wildcard) this mapping doesn't need, so existing events are never removed.
+        existing_events = set(hook.get("events", []))
+        if "*" in existing_events or existing_events.issuperset(required_events):
+            return
+
+        transformer_functions.update_repo_webhook_events(
+            self.instance_obj, org, project_info["display_name"], hook["id"],
+            list(existing_events | set(required_events)))
+
+    def __ensure_org_webhook_events(self, org, hook, required_events):
+        # Additive only: this org-level hook can be shared across mappings, so existing events
+        # (and the "*" wildcard, if present) are never removed, only added to.
+        existing_events = set(hook.get("events", []))
+        if "*" in existing_events or existing_events.issuperset(required_events):
+            return
+
+        transformer_functions.update_org_webhook_events(
+            self.instance_obj, org, hook["id"], list(existing_events | set(required_events)))
 
