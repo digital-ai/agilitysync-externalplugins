@@ -75,7 +75,7 @@
     ],
     "additional_mapping": {
         "attachment": {
-            "enabled": true 
+            "enabled": false 
         },
         "comment": {
             "enabled": true
@@ -88,7 +88,7 @@
         },
         
         "missing_events": {
-            "enabled": true
+            "enabled": false
         },
         "conflict_resolution": {
             "enabled": true
