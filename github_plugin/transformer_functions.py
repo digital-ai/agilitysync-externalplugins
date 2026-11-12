@@ -28,7 +28,7 @@ fields = [
     "required": False,
     "disabled field": False,
     "customfield":False,
-    "raw_title": "Labels",
+    "raw_title": "labels",
     "title":"labels",
     "type":"labels",
     "IsMultivalue" : True
@@ -37,7 +37,7 @@ fields = [
     "required": False,
     "disabled field": False,
     "customfield":False,
-    "raw_title": "Milestone",
+    "raw_title": "milestone",
     "title":"milestone",
     "type":"milestone",
     "IsMultivalue" : True

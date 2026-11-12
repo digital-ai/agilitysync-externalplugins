@@ -8,6 +8,9 @@ TRIGGER_CATEGORY_NAME = "All AS Triggers"
 NO_PROJECT_ID = "no_project"
 NO_PROJECT_DISPLAY_NAME = "No Project"
 
+# Not a valid character in GitHub repository names.
+PROJECT_ID_SEPARATOR = "|"
+
 # Synthetic issue type that is always available, used both when no real Project is selected and
 # prepended to the real issue-type list fetched from GitHub when a Project is selected.
 # The id/asset values are also the routing key persisted in existing mappings - keep them stable.

@@ -176,12 +176,17 @@ class AssetsManage(BaseAssetsManage):
     
     def fetch_projects(self):
         org = self.instance_details["organization"]
+        github_project_id = self.query_params.get("github_project", {}).get("id")
         response_repos= transformer_functions.get_repos(self.instance_obj,org)
         projects = [ ]
         for project in response_repos:
+            repo_id = str(project['name'])
+            if github_project_id not in (None, DEFAULT.NO_PROJECT_ID):
+                # WebHook only receives project_info, so the selected Project is carried in the id.
+                repo_id = "{}{}{}".format(repo_id, DEFAULT.PROJECT_ID_SEPARATOR, github_project_id)
             projects.append(
                 {
-                    'id': str(project['name']),
+                    'id': repo_id,
                     "project": org + "/" + str(project["id"]),
                     'display_name': project['name'],
                     'parent_id':org
@@ -216,18 +221,16 @@ class WebHook(BaseWebHook):
     def create_webhook(self, webhook_name, webhook_url, webhook_description, project_id=None):
         project_info = self.__find_project_info(project_id)
         org = self.instance_details["organization"]
-        github_project = self.custom_assets_info.get("github_project", {})
 
-        if github_project.get("id") in (None, DEFAULT.NO_PROJECT_ID):
+        if not self.__has_github_project(project_info):
             self.__create_repo_webhook(org, project_info, webhook_url)
         else:
             self.__create_or_reuse_org_webhook(org, webhook_url)
 
     def update_webhook(self, webhook_url, project_id=None) -> None:
         project_info = self.__find_project_info(project_id)
-        github_project = self.custom_assets_info.get("github_project", {})
 
-        if github_project.get("id") in (None, DEFAULT.NO_PROJECT_ID):
+        if not self.__has_github_project(project_info):
             self.__update_repo_webhook(project_info, webhook_url)
         else:
             self.__update_org_webhook(webhook_url)
@@ -238,6 +241,11 @@ class WebHook(BaseWebHook):
                 return project_info
 
         raise ValueError("Unable to find project info for project id [{}]".format(project_id))
+
+    @staticmethod
+    def __has_github_project(project_info):
+        # See AssetsManage.fetch_projects: "<repo>|<project number>" when a Project is selected.
+        return DEFAULT.PROJECT_ID_SEPARATOR in str(project_info.get("id", ""))
 
     def __create_repo_webhook(self, org, project_info, webhook_url):
         required_events = self.__repo_events()

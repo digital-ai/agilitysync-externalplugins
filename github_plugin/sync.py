@@ -83,6 +83,10 @@ class Event(BaseEvent):
     UPDATE_ACTIONS = ('edited', 'field_added', 'field_removed', 'assigned',
                       'unassigned', 'labeled', 'unlabeled', 'milestoned', 'demilestoned')
 
+    # The 'opened' payload can arrive with no type yet, so it can't match a typed mapping; these
+    # are sent as CREATE, which the framework skips if the issue is already synced.
+    TYPE_ACTIONS = ('typed', 'untyped')
+
     # Actions for the issue_comment webhook event (comment deletes/pins are not synced).
     COMMENT_ACTIONS = ('created', 'edited')
 
@@ -102,7 +106,7 @@ class Event(BaseEvent):
                 return EventTypes.UPDATE
             raise as_exceptions.PayloadError('Unsupported issue_comment event type [{}]'.format(event_type))
 
-        if event_type == 'opened':
+        if event_type == 'opened' or event_type in self.TYPE_ACTIONS:
             return EventTypes.CREATE
         elif event_type == 'closed':
             return EventTypes.DELETE
@@ -130,6 +134,10 @@ class Event(BaseEvent):
 
     def fetch_revision(self):
         return self.__fetch_issue()["updated_at"]
+
+    def is_check_duplicate_event(self):
+        # opened and typed for a new issue share updated_at; only the first one queued should create.
+        return self.event.get("action") in ('opened',) + self.TYPE_ACTIONS
 
     def fetch_timestamp(self):
         timestamp = parser.parse(self.__fetch_issue()["updated_at"])
@@ -160,7 +168,7 @@ class Inbound(BaseInbound):
             category.append(EventCategory.WORKITEM)
             return category
 
-        if event_type in ('opened', 'closed') + Event.UPDATE_ACTIONS:
+        if event_type in ('opened', 'closed') + Event.UPDATE_ACTIONS + Event.TYPE_ACTIONS:
             category.append(EventCategory.WORKITEM)
 
         return category
@@ -169,6 +177,29 @@ class Inbound(BaseInbound):
         if "comment" in self.event:
             return self.event['comment']['body']
         return ""
+
+    # GitHub has no changelog; the action (or "changes" for edited) says which field changed.
+    ACTION_CHANGED_FIELDS = {
+        "assigned": ("assignee", "assignees"),
+        "unassigned": ("assignee", "assignees"),
+        "labeled": ("labels",),
+        "unlabeled": ("labels",),
+        "milestoned": ("milestone",),
+        "demilestoned": ("milestone",),
+    }
+
+    def normalize_update_fields(self, inbound_field_attr):
+        action = self.event.get("action")
+        if action == "edited":
+            changed_fields = self.event.get("changes", {}).keys()
+        else:
+            changed_fields = self.ACTION_CHANGED_FIELDS.get(action, ())
+
+        if inbound_field_attr["name"].lower() not in changed_fields:
+            return False, None
+
+        # The issue in the payload already holds the new value, same as on create.
+        return self.get_payload_pattern_value(inbound_field_attr, "create")
 
     def fetch_parent_id(self):
         if "sub_issue" not in self.event:
@@ -205,17 +236,37 @@ class Outbound(BaseOutbound):
             if outbound_field.name.lower().startswith("projectfield:"):
                 continue
 
-            create_fields.setdefault(outbound_field.name.lower(),[])
+            field_name = outbound_field.name.lower()
             if outbound_field.is_multivalue:
-                for val in outbound_field.value[0]:
-                    create_fields[outbound_field.name.lower()].append(val[1])
+                values = self.__multivalue_values(outbound_field.value)
+                if field_name == "assignee":
+                    # GitHub's "assignee" only takes a single login; "assignees" takes the list.
+                    create_fields["assignees"] = values
+                elif field_name == "milestone":
+                    create_fields["milestone"] = values[0] if values else None
+                else:
+                    create_fields[field_name] = values
             else:
-                create_fields[outbound_field.name.lower()] =outbound_field.value 
+                create_fields[field_name] = outbound_field.value
 
         # The synthetic default asset has no corresponding organization issue type to set.
         if self.asset_info.get("id") != DEFAULT.DEFAULT_ISSUE_TYPE["id"]:
             create_fields["type"] = self.asset_info["asset"]
         return create_fields
+
+    @staticmethod
+    def __multivalue_values(value_docs):
+        # Framework format: [{"act": "set", "field_value": [...]}] or [{"act": "add"/"remove", "field_value": v}, ...]
+        values = []
+        for value_doc in value_docs or []:
+            field_value = value_doc.get("field_value")
+            if value_doc.get("act") == "set":
+                values = [val for val in (field_value or []) if val not in (None, "")]
+            elif value_doc.get("act") == "add" and field_value not in (None, ""):
+                values.append(field_value)
+            elif value_doc.get("act") == "remove" and field_value in values:
+                values.remove(field_value)
+        return values
 
     def create(self, sync_fields):
 
@@ -260,7 +311,7 @@ class Outbound(BaseOutbound):
         try:
             transformer_functions.add_project_item(
                 self.instance_object, org, github_project["id"],
-                {"content_id": ticket["id"], "content_type": "Issue"}
+                {"type": "Issue", "id": ticket["id"]}
             )
         except Exception as ex:
             as_log.warn("Unable to add the created issue to GitHub Project [{}]. The error is [{}].".format(
