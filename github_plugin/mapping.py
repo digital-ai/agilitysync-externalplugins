@@ -61,6 +61,17 @@ class Field(BaseField):
         if field_type.startswith("projectfield:"):
             return self._fetch_project_fieldtype_info()
 
+        if field_type.startswith(DEFAULT.ISSUE_FIELD_PREFIX):
+            return self._fetch_issue_fieldtype_info()
+
+        if field_type == "body":
+            # HTML so Agility's Description maps as-is; sync.py converts to/from GitHub Markdown.
+            return self._field_type_info(FieldTypes.HTML, FieldDisplayIcon.HTML)
+
+        if field_type == "assignee":
+            # User type so Agility user fields (Owners) get user docs; text->user conversion breaks Agility.
+            return self._field_type_info(FieldTypes.USER, FieldDisplayIcon.USER)
+
         if field_type == "milestone":
             org = self.fields_obj.instance_details["organization"]
             repo = self.fields_obj.project_info["display_name"]
@@ -75,7 +86,20 @@ class Field(BaseField):
                 FieldTypes.TEXT
             )
 
-        # title / assignee / labels are all simple text fields.
+        if field_type == "labels":
+            labels = transformer_functions.get_labels(
+                self.instance_obj, self.fields_obj.instance_details["organization"],
+                self.fields_obj.project_info["display_name"])
+            value_list = [{"id": label["id"], "value": label["name"], "display_value": label["name"]}
+                          for label in labels]
+            return self._field_type_info(
+                FieldTypes.LIST,
+                FieldDisplayIcon.DROPDOWN,
+                value_list,
+                FieldTypes.TEXT
+            )
+
+        # title is a simple text field.
         return self._field_type_info(FieldTypes.TEXT, FieldDisplayIcon.TEXT)
 
     def _fetch_project_fieldtype_info(self):
@@ -111,11 +135,33 @@ class Field(BaseField):
 
         return self._field_type_info(FieldTypes.TEXT, FieldDisplayIcon.TEXT)
 
+    def _fetch_issue_fieldtype_info(self):
+        data_type = self.field_attr.get("data_type", "text")
+
+        if data_type in ("single_select", "multi_select"):
+            value_list = [{"id": option["id"], "value": option["name"], "display_value": option["name"]}
+                          for option in self.field_attr.get("options", [])]
+            return self._field_type_info(
+                FieldTypes.LIST,
+                FieldDisplayIcon.DROPDOWN,
+                value_list,
+                FieldTypes.TEXT
+            )
+        elif data_type == "date":
+            return self._field_type_info(FieldTypes.DATE, FieldDisplayIcon.DATE)
+        elif data_type == "number":
+            return self._field_type_info(FieldTypes.NUMERIC, FieldDisplayIcon.NUMERIC)
+
+        return self._field_type_info(FieldTypes.TEXT, FieldDisplayIcon.TEXT)
+
 
 class Fields(BaseFields):
 
     def fetch_fields(self):
         field_list = list(transformer_functions.fields)
+        issue_fields = self.__issue_fields()
+        # GitHub surfaces org Issue Fields inside every Project too; list them once, as Issue Fields.
+        issue_field_names = {issue_field["title"].lower() for issue_field in issue_fields}
 
         github_project = self.query_params.get("github_project", {})
         if github_project.get("id") not in (None, DEFAULT.NO_PROJECT_ID):
@@ -126,6 +172,8 @@ class Fields(BaseFields):
                 # Milestone, Repository, Type, Reviewers, Parent issue, etc). `data_type` values are
                 # lowercase snake_case as returned by GitHub's Projects v2 REST API.
                 if project_field.get("data_type") not in ("text", "number", "date", "single_select", "iteration"):
+                    continue
+                if project_field["name"].lower() in issue_field_names:
                     continue
                 field_list.append({
                     "required": False,
@@ -140,7 +188,28 @@ class Fields(BaseFields):
                     "iterations": project_field.get("configuration", {}).get("iterations", [])
                 })
 
+        field_list.extend(issue_fields)
         return field_list
+
+    def __issue_fields(self):
+        try:
+            issue_fields = transformer_functions.get_issue_fields(
+                self.instance_obj, self.instance_details["organization"])
+        except Exception:
+            # Issue Fields aren't enabled for every organization.
+            return []
+
+        return [{
+            "required": False,
+            "disabled field": False,
+            "customfield": True,
+            "raw_title": "{}{}".format(DEFAULT.ISSUE_FIELD_PREFIX, issue_field["id"]),
+            "title": issue_field["name"],
+            "type": "{}{}".format(DEFAULT.ISSUE_FIELD_PREFIX, issue_field["id"]),
+            "IsMultivalue": issue_field.get("data_type") == "multi_select",
+            "data_type": issue_field.get("data_type", "text"),
+            "options": issue_field.get("options") or []
+        } for issue_field in issue_fields or []]
 
 
 class AssetsManage(BaseAssetsManage):

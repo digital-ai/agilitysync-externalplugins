@@ -28,7 +28,7 @@
         {
             "title": "URL",
             "name": "url",
-            "description": "URL, for example: https://github.com/company",
+            "description": "GitHub web URL, for example: https://github.com (or your GitHub Enterprise Server URL)",
             "type": "input"
         },
         {
