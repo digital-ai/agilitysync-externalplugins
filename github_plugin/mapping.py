@@ -14,6 +14,12 @@ import external_plugins.github_plugin.default as DEFAULT
 
 from agilitysync.external_lib.restapi import ASyncRestApi
 
+
+def _text(value):
+    # Projects REST returns option names and iteration titles as {"raw": ..., "html": ...}; value lists need the
+    # plain text (it's what sync.py matches against, and core sorts the values when comparing repositories).
+    return value.get("raw") if isinstance(value, dict) else value
+
 class Field(BaseField):
     
 
@@ -109,7 +115,7 @@ class Field(BaseField):
 
         if data_type == "single_select":
             options = self.field_attr.get("options", [])
-            value_list = [{"id": option["id"], "value": option["name"]["raw"], "display_value": option["name"]["raw"]}
+            value_list = [{"id": option["id"], "value": _text(option["name"]), "display_value": _text(option["name"])}
                          for option in options]
             return self._field_type_info(
                 FieldTypes.LIST,
@@ -120,8 +126,8 @@ class Field(BaseField):
         elif data_type == "iteration":
             # Iteration field options are unconfirmed against a live delivery; best effort only.
             iterations = self.field_attr.get("iterations", [])
-            value_list = [{"id": iteration["id"], "value": iteration.get("title", iteration["id"]),
-                          "display_value": iteration.get("title", iteration["id"])} for iteration in iterations]
+            value_list = [{"id": iteration["id"], "value": _text(iteration.get("title")) or iteration["id"],
+                          "display_value": _text(iteration.get("title")) or iteration["id"]} for iteration in iterations]
             return self._field_type_info(
                 FieldTypes.LIST,
                 FieldDisplayIcon.DROPDOWN,
@@ -139,7 +145,7 @@ class Field(BaseField):
         data_type = self.field_attr.get("data_type", "text")
 
         if data_type in ("single_select", "multi_select"):
-            value_list = [{"id": option["id"], "value": option["name"], "display_value": option["name"]}
+            value_list = [{"id": option["id"], "value": _text(option["name"]), "display_value": _text(option["name"])}
                           for option in self.field_attr.get("options", [])]
             return self._field_type_info(
                 FieldTypes.LIST,

@@ -97,7 +97,7 @@
             "enabled": true
         },
         "search_before_create": {
-            "enabled": true,
+            "enabled": false,
             "search_query": [
                 {
                     "field_types": ["text"],

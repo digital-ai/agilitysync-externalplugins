@@ -180,6 +180,23 @@ def get_issue(instance, org, repo, issue_number):
     return instance.get(path)
 
 
+def get_parent_issue_id(instance, org, repo, issue_number):
+    # GraphQL rather than REST /parent, which answers 404 (logged as an error) for every issue without a parent.
+    # fullDatabaseId is the REST/webhook issue id; databaseId can't hold ids above 32 bits.
+    query = ("query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) {"
+             " issue(number: $number) { parent { fullDatabaseId } } } }")
+    base_url = instance.base_url[:-len("/v3")] if instance.base_url.endswith("/v3") else instance.base_url
+    response = instance.post("graphql", {"query": query, "variables": {
+        "owner": org, "repo": repo, "number": int(issue_number)}}, base_url=base_url)
+
+    if response.get("errors"):
+        raise Exception(response["errors"])
+
+    issue = ((response.get("data") or {}).get("repository") or {}).get("issue") or {}
+    parent_id = (issue.get("parent") or {}).get("fullDatabaseId")
+    return int(parent_id) if parent_id else None
+
+
 def get_repo(instance, org, repo):
     path = "repos/{}/{}".format(org, repo)
     return instance.get(path)
@@ -202,6 +219,11 @@ def add_issue_field_values(instance, org, repo, issue_number, values):
     path = "repos/{}/{}/issues/{}/issue-field-values".format(org, repo, issue_number)
     response = instance.post(path, {"issue_field_values": values})
     return response
+
+
+def get_issue_field_values(instance, org, repo, issue_number):
+    path = "repos/{}/{}/issues/{}/issue-field-values".format(org, repo, issue_number)
+    return instance.get(path, query_str="per_page=100")
 
 
 def delete_issue_field_value(instance, org, repo, issue_number, field_id):

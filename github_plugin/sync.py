@@ -14,6 +14,7 @@ from agilitysync.lib.plugin_manage import plugin_info
 from datetime import datetime
 from dateutil import parser
 import itertools
+import hashlib
 import re
 import time
 import json
@@ -84,6 +85,23 @@ def _raw_text(value):
     return value.get("raw") if isinstance(value, dict) else value
 
 
+def _issue_field_doc_value(doc, data_type=None):
+    # An Issue Field value object. REST (issue-field-values list, issue.issue_field_values) uses data_type with
+    # single_select_option/multi_select_options; the field_added webhook has no data_type (it's issue_field.field_type)
+    # and uses option/options. Selects are read by option name, which is what value mapping uses.
+    if not doc:
+        return None
+    data_type = doc.get("data_type") or data_type
+    single = doc.get("single_select_option") or doc.get("option")
+    multi = doc.get("multi_select_options") if doc.get("multi_select_options") is not None else doc.get("options")
+
+    if data_type == "single_select" or (data_type is None and single):
+        return (single or {}).get("name") or doc.get("value")
+    if data_type == "multi_select" or (data_type is None and multi is not None):
+        return [option["name"] for option in multi] if multi is not None else None
+    return doc.get("value")
+
+
 def _project_field_api_value(field, value):
     # Shape expected by PATCH .../projectsV2/{n}/items/{id}; None clears the field.
     if value in (None, "", []):
@@ -128,9 +146,9 @@ class Payload(BasePayload):
             org = self.payload["organization"]["login"]
             project_number = field_change["project_number"]
 
-            field_id = next((field["id"] for field in transformer_functions.get_project_fields(instance, org, project_number)
-                             if field.get("node_id") == field_change.get("field_node_id")), None)
-            if field_id is None:
+            field = next((field for field in transformer_functions.get_project_fields(instance, org, project_number)
+                          if field.get("node_id") == field_change.get("field_node_id")), None)
+            if field is None:
                 as_log.warn("Skipping GitHub Project field change as field [{}] was not found in Project [{}].".format(
                     field_change.get("field_name"), project_number))
                 return None
@@ -139,10 +157,28 @@ class Payload(BasePayload):
             owner, repo = content["repository_url"].split("/repos/", 1)[1].split("/")[:2]
             issue = transformer_functions.get_issue(instance, owner, repo, content["number"])
             repository = transformer_functions.get_repo(instance, owner, repo)
+
+            issue_field_value = None
+            if field.get("issue_field_id"):
+                issue_field_value = next(
+                    (value for value in transformer_functions.get_issue_field_values(instance, owner, repo, content["number"])
+                     if str(value.get("issue_field_id")) == str(field["issue_field_id"])), None)
         except Exception as ex:
             as_log.warn("Unable to resolve the issue for GitHub Project item [{}]. The error is [{}].".format(
                 item.get("id"), str(ex)))
             return None
+
+        if field.get("issue_field_id"):
+            # An org Issue Field column shown in the Project; it is mapped as the Issue Field, so route it as one.
+            return {
+                "action": "field_added" if issue_field_value else "field_removed",
+                "issue": issue,
+                "repository": repository,
+                "sender": self.payload["sender"],
+                "projects_v2_item": item,
+                "issue_field": {"id": field["issue_field_id"], "name": field.get("name")},
+                "issue_field_value": issue_field_value,
+            }
 
         return {
             "action": Event.PROJECT_FIELD_ACTION,
@@ -151,7 +187,7 @@ class Payload(BasePayload):
             "sender": self.payload["sender"],
             "projects_v2_item": item,
             "project_field": {
-                "name": "projectfield:{}".format(field_id),
+                "name": "projectfield:{}".format(field["id"]),
                 "value": _project_field_value(field_change.get("to")),
             },
         }
@@ -212,6 +248,10 @@ class Event(BaseEvent):
     # Actions for the sub_issues webhook event - these only ever change the parent/child link.
     SUB_ISSUE_ACTIONS = ('parent_issue_added', 'parent_issue_removed', 'sub_issue_added', 'sub_issue_removed')
 
+    # An org Issue Field value was set/updated or cleared; also synthesized by Payload for Issue Field
+    # columns edited from a Project.
+    ISSUE_FIELD_ACTIONS = ('field_added', 'field_removed')
+
     def fetch_event_type(self):
         event_type = self.event['action']
 
@@ -253,14 +293,35 @@ class Event(BaseEvent):
         return urlparse(self.__fetch_issue()['html_url']).path
 
     def fetch_revision(self):
-        return self.__fetch_updated_at()
+        updated_at = self.__fetch_updated_at()
+        if self.event.get("action") not in self.STATE_ACTIONS:
+            return updated_at
 
-    # Fired once per value when an issue is created with several labels/assignees, all with the same updated_at.
+        # GitHub doesn't always move updated_at for assignee/label changes, so the resulting state is part of the
+        # revision: events fired by one change still share it, a later change doesn't.
+        issue = self.__fetch_issue()
+        state = "|".join((
+            ",".join(sorted(assignee["login"] for assignee in issue.get("assignees") or [])),
+            ",".join(sorted(label["name"] for label in issue.get("labels") or [])),
+            (issue.get("milestone") or {}).get("title") or ""))
+        return "{}#{}".format(updated_at, hashlib.sha1(state.encode()).hexdigest()[:12])  # NOSONAR not used for security
+
+    # Fired once per value when an issue is created with several labels/assignees, or when several are changed
+    # at once; every event of one such change carries the same resulting issue state.
     BURST_ACTIONS = ('labeled', 'unlabeled', 'assigned', 'unassigned')
+    STATE_ACTIONS = ('opened',) + TYPE_ACTIONS + BURST_ACTIONS
 
     def is_check_duplicate_event(self):
-        # Events sharing updated_at carry the same full issue state; only the first one queued is needed.
-        return self.event.get("action") in ('opened',) + self.TYPE_ACTIONS + self.BURST_ACTIONS
+        return self.event.get("action") in self.STATE_ACTIONS
+
+    def is_skip_event(self):
+        # Only this issue's latest event is compared, so a later change back to an earlier state, or another
+        # issue changed in the same second, isn't taken for a duplicate.
+        latest = self.db_obj.events.find_one(
+            {"data_map_id": self.datamap["data_map_id"], "instance_id": self.datamap["inbound"]["instance_id"],
+             "workitem_id": self.workitem_id},
+            {"revision": 1}, sort=[("_id", -1)])
+        return bool(latest) and latest.get("revision") == self.revision
 
     def is_sync_this_event(self):
         # Closing an issue deletes its Agility item and sync link, so any later event on the closed issue
@@ -270,18 +331,32 @@ class Event(BaseEvent):
                 self.event.get("action"), self.__fetch_issue().get("number")))
             return False
 
-        # Project field edits (incl. GitHub's own Project automation) only matter if that field is mapped.
-        if self.event.get("action") == self.PROJECT_FIELD_ACTION:
-            field_name = self.event["project_field"]["name"]
-            if not any((io_field or {}).get("inbound", {}).get("name", "").lower() == field_name
-                       for io_field in self.datamap.get("field_mapping", [])):
+        # Project field and Issue Field edits (incl. GitHub's own Project automation) only matter if that field is mapped.
+        action = self.event.get("action")
+        if action == self.PROJECT_FIELD_ACTION:
+            if not self.__is_field_mapped(self.event["project_field"]["name"]):
+                return False
+        elif action in self.ISSUE_FIELD_ACTIONS and self.event.get("issue_field"):
+            if not self.__is_field_mapped("{}{}".format(DEFAULT.ISSUE_FIELD_PREFIX, self.event["issue_field"]["id"])):
                 return False
         return super().is_sync_this_event()
 
+    def __is_field_mapped(self, field_name):
+        return any((io_field or {}).get("inbound", {}).get("name", "").lower() == field_name
+                   for io_field in self.datamap.get("field_mapping", []))
+
     def fetch_timestamp(self):
         timestamp = parser.parse(self.__fetch_updated_at())
+        event_time = datetime.fromtimestamp(time.mktime(timestamp.utctimetuple()))  # type: ignore
 
-        return datetime.fromtimestamp(time.mktime(timestamp.utctimetuple())) # type: ignore
+        action = self.event.get("action")
+        if ((action in self.ISSUE_FIELD_ACTIONS and "projects_v2_item" not in self.event) or
+                action in self.BURST_ACTIONS):
+            # Setting an Issue Field or assignee/label may not move the issue's updated_at, which would make the
+            # change look older than the field's last sync from the other side and get it skipped; the receipt
+            # time can't be (assignees/labels are read as they are now, see Inbound.__fetch_issue_state).
+            return max(event_time, datetime.utcnow())
+        return event_time
 
     def __fetch_updated_at(self):
         # A Project field edit doesn't touch the issue's updated_at, only the project item's.
@@ -356,11 +431,8 @@ class Inbound(BaseInbound):
             changed_fields = self.event.get("changes", {}).keys()
         elif action == Event.MIGRATE_UPDATE_ACTION:
             return self.__fetch_issue_field_value(inbound_field_attr, allow_empty=True)
-        elif action in ("field_added", "field_removed"):
-            # The event doesn't say which Issue Field changed; every mapped one is re-read from the issue.
-            if not inbound_field_attr["name"].lower().startswith(DEFAULT.ISSUE_FIELD_PREFIX):
-                return False, None
-            return self.__fetch_issue_field_value(inbound_field_attr, allow_empty=True)
+        elif action in Event.ISSUE_FIELD_ACTIONS:
+            return self.__fetch_changed_issue_field(inbound_field_attr)
         else:
             changed_fields = self.ACTION_CHANGED_FIELDS.get(action, ())
 
@@ -373,9 +445,28 @@ class Inbound(BaseInbound):
     def normalize_create_fields(self, inbound_field_attr):
         return self.__fetch_issue_field_value(inbound_field_attr, allow_empty=False)
 
+    def __fetch_issue_state(self):
+        issue = self.event.get("issue") or {}
+        if self.event.get("action") not in Event.BURST_ACTIONS:
+            return issue
+
+        # Assign/label events fired by one change share updated_at and only the first is kept
+        # (Event.is_check_duplicate_event), but its payload can be an in-between state (e.g. the add before
+        # the matching remove), so the issue is read as it is now.
+        if getattr(self, "_current_issue", None) is None:
+            repository = self.event.get("repository") or {}
+            try:
+                self._current_issue = transformer_functions.get_issue(
+                    self.instance_object, repository["owner"]["login"], repository["name"], issue["number"])
+            except Exception as ex:
+                as_log.warn("Unable to read the current state of GitHub issue [{}], using the event's. "
+                            "The error is [{}].".format(issue.get("number"), str(ex)))
+                return issue
+        return self._current_issue
+
     def __fetch_issue_field_value(self, inbound_field_attr, allow_empty):
         # GitHub sends assignees/labels/milestone as objects (or null); Agility needs the plain names.
-        issue = self.event.get("issue") or {}
+        issue = self.__fetch_issue_state()
         name = inbound_field_attr["name"].lower()
 
         if name in ("assignee", "assignees"):
@@ -393,7 +484,7 @@ class Inbound(BaseInbound):
         elif name == "body":
             return self.__fetch_body_html(issue.get("body"), allow_empty)
         elif name.startswith(DEFAULT.ISSUE_FIELD_PREFIX):
-            return self.__fetch_issue_field(issue, name, inbound_field_attr, allow_empty)
+            return self.__fetch_issue_field(name, inbound_field_attr, allow_empty)
         else:
             return self.get_payload_pattern_value(inbound_field_attr, "create")
 
@@ -402,20 +493,58 @@ class Inbound(BaseInbound):
             return False, None
         return True, values
 
-    def __fetch_issue_field(self, issue, name, inbound_field_attr, allow_empty):
+    def __fetch_issue_field(self, name, inbound_field_attr, allow_empty):
+        field_values = self.__fetch_issue_field_values()
+        if field_values is None:
+            # Unknown current value: skip the field rather than clear it in the other system.
+            return False, None
+
         field_id = name[len(DEFAULT.ISSUE_FIELD_PREFIX):]
-        field_value = next((value for value in issue.get("issue_field_values") or []
-                            if str(value.get("issue_field_id")) == field_id), None)
+        field_value = next((value for value in field_values if str(value.get("issue_field_id")) == field_id), None)
+
+        return self.__issue_field_result(_issue_field_doc_value(field_value), inbound_field_attr, allow_empty)
+
+    def __fetch_issue_field_values(self):
+        # Issues in webhook payloads (and from GET issue) come with an empty issue_field_values, so the
+        # values are listed from GitHub, once per event.
+        if getattr(self, "_issue_field_values", None) is None:
+            issue = self.event.get("issue") or {}
+            field_values = issue.get("issue_field_values")
+            if not field_values:
+                repository = self.event.get("repository") or {}
+                try:
+                    field_values = transformer_functions.get_issue_field_values(
+                        self.instance_object, repository["owner"]["login"], repository["name"], issue["number"])
+                except Exception as ex:
+                    as_log.warn("Unable to read the Issue Field values of GitHub issue [{}]. The error is [{}].".format(
+                        issue.get("number"), str(ex)))
+                    return None
+            self._issue_field_values = field_values or []
+        return self._issue_field_values
+
+    def __fetch_changed_issue_field(self, inbound_field_attr):
+        name = inbound_field_attr["name"].lower()
+        if not name.startswith(DEFAULT.ISSUE_FIELD_PREFIX):
+            return False, None
+
+        changed_field = self.event.get("issue_field") or {}
+        if not changed_field.get("id"):
+            # No field info in the event: re-read every mapped Issue Field from the issue.
+            return self.__fetch_issue_field_value(inbound_field_attr, allow_empty=True)
+
+        if name != "{}{}".format(DEFAULT.ISSUE_FIELD_PREFIX, changed_field["id"]):
+            return False, None
 
         value = None
-        if field_value:
-            if field_value.get("data_type") == "single_select":
-                value = (field_value.get("single_select_option") or {}).get("name")
-            elif field_value.get("data_type") == "multi_select":
-                value = [option["name"] for option in field_value.get("multi_select_options") or []]
-            else:
-                value = field_value.get("value")
+        if self.event.get("action") == "field_added":
+            value = _issue_field_doc_value(self.event.get("issue_field_value"), changed_field.get("field_type"))
+            if value in (None, "", []):
+                return self.__fetch_issue_field(name, inbound_field_attr, True)
 
+        return self.__issue_field_result(value, inbound_field_attr, allow_empty=True)
+
+    @staticmethod
+    def __issue_field_result(value, inbound_field_attr, allow_empty):
         if value in (None, "", []):
             if not allow_empty:
                 return False, None
@@ -475,6 +604,10 @@ class Inbound(BaseInbound):
 
     def fetch_parent_id(self):
         if "sub_issue" not in self.event:
+            # A sub-issue's create (incl. one rebuilt by migrate_create) only names its parent by URL, and some
+            # Agility types (e.g. Task) can't be created without a parent.
+            if self.event_type == EventTypes.CREATE:
+                return self.__fetch_parent_issue_id(), None
             return None, None
 
         action = self.event["action"]
@@ -484,6 +617,34 @@ class Inbound(BaseInbound):
             return "", self.event["parent_issue_id"]
 
         return None, None
+
+    def __fetch_parent_issue_id(self):
+        # The parent's global issue id, which is what sub_issues events send and what sync links are keyed by.
+        issue = self.event.get("issue") or {}
+        parent_url = issue.get("parent_issue_url")
+        if not parent_url:
+            # Webhook issue payloads don't carry the parent, so ask GitHub (also covers resync of a stored event).
+            return self.__fetch_current_parent_issue_id(issue.get("number"))
+
+        try:
+            owner, repo, _, number = parent_url.split("/repos/", 1)[1].split("/")[:4]
+            return transformer_functions.get_issue(self.instance_object, owner, repo, number)["id"]
+        except Exception as ex:
+            as_log.warn("Unable to resolve the parent issue [{}]. The error is [{}].".format(parent_url, str(ex)))
+            return None
+
+    def __fetch_current_parent_issue_id(self, issue_number):
+        repository = self.event.get("repository") or {}
+        owner = (repository.get("owner") or {}).get("login")
+        if not (owner and repository.get("name") and issue_number):
+            return None
+
+        try:
+            return transformer_functions.get_parent_issue_id(self.instance_object, owner, repository["name"], issue_number)
+        except Exception as ex:
+            as_log.warn("Unable to fetch the parent of GitHub issue [{}]. The error is [{}].".format(
+                issue_number, str(ex)))
+            return None
 
 
 class Outbound(BaseOutbound):
