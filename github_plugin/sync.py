@@ -315,12 +315,18 @@ class Event(BaseEvent):
         return self.event.get("action") in self.STATE_ACTIONS
 
     def is_skip_event(self):
+        query = {"data_map_id": self.datamap["data_map_id"], "instance_id": self.datamap["inbound"]["instance_id"],
+                 "workitem_id": self.workitem_id}
+
+        if self.event_type == EventTypes.CREATE:
+            # opened/typed of one new issue share a revision, but other events (e.g. the Project's default Status
+            # being set) can land between them, so any earlier CREATE is compared, not just the latest event.
+            query.update({"event_type": EventTypes.CREATE, "revision": self.revision})
+            return bool(self.db_obj.events.find_one(query, {"_id": 1}))
+
         # Only this issue's latest event is compared, so a later change back to an earlier state, or another
         # issue changed in the same second, isn't taken for a duplicate.
-        latest = self.db_obj.events.find_one(
-            {"data_map_id": self.datamap["data_map_id"], "instance_id": self.datamap["inbound"]["instance_id"],
-             "workitem_id": self.workitem_id},
-            {"revision": 1}, sort=[("_id", -1)])
+        latest = self.db_obj.events.find_one(query, {"revision": 1}, sort=[("_id", -1)])
         return bool(latest) and latest.get("revision") == self.revision
 
     def is_sync_this_event(self):
